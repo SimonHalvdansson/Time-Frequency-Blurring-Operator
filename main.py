@@ -26,7 +26,9 @@ def download_and_save_data():
         print("Data folder exists.")
     else:
         print("Creating folder.")
-        os.mkdir(folder) 
+        os.mkdir(folder)
+    
+    torchaudio.datasets.SPEECHCOMMANDS(f'./{folder}/', download=True)
         
 
 def load_audio_files(path: str, train_im, val_im, test_im):
@@ -91,16 +93,62 @@ def waveform_to_spectrogram(waveform):
 
     return log_mel_spectrogram
 
-def plot_spectrogram(spec, title=None, ylabel='freq_bin', aspect='auto', xmax=None):
+def plot_spectrogram(spec, title=None, ylabel='Frequency', aspect='auto', xmax=None):
     fig, axs = plt.subplots(1, 1)
     axs.set_title(title or 'Spectrogram')
     axs.set_ylabel(ylabel)
-    axs.set_xlabel('frame')
+    axs.set_xlabel('Time')
     im = axs.imshow(spec.squeeze(), origin='lower', aspect=aspect)
     if xmax:
         axs.set_xlim((0, xmax))
     fig.colorbar(im, ax=axs)
     plt.show()
+
+def plot_augmentations():
+    #Plots the summary of augmentation methods presented in the paper
+    train_dataset, validation_dataset, test_dataset, labels = load_audio_files('./data/SpeechCommands/speech_commands_v0.02', 1, 0, 0)
+    wf = train_dataset[0][0]
+    wf = pad_waveform(wf, 16000)
+    
+    wf_noise = add_noise(wf)
+    wf_stft_conv = add_stft_conv(wf)
+    
+    spec = waveform_to_spectrogram(wf)
+    spec_noise = waveform_to_spectrogram(wf_noise)
+    spec_stft_conv = waveform_to_spectrogram(wf_stft_conv)
+    spec_aug = add_spec_aug(spec)
+    spec_blur = add_spec_blur(spec)
+    
+    spectrograms = [spec.numpy(), spec_noise.numpy(), spec_stft_conv.numpy(), spec_aug.numpy(), spec_blur.numpy()]
+    titles = ['Original', 'White noise', 'STFT convolved', 'SpecAugment', 'SpecBlur']
+    
+    # Set up the figure and the subplots
+    fig, axes = plt.subplots(1, 5, figsize=(15, 3), sharey=True, dpi=1000)
+    fig.subplots_adjust(right=0.83)
+    cbar_ax = fig.add_axes([0.85, 0.15, 0.015, 0.6])
+    
+    # Plot the spectrograms
+    for i, spec in enumerate(spectrograms):
+        im = axes[i].imshow(spec.squeeze(), aspect="auto", origin="lower", extent=[0, 1, 0, 256])
+        axes[i].set_title(titles[i])
+        if i == 2:
+            axes[i].set_xlabel("Time [s]")
+        if i == 0:
+            axes[i].set_ylabel("Mel frequency bin")
+    
+    # Add a smaller colorbar
+    fig.colorbar(im, cax=cbar_ax)
+    
+    # Show the plot
+    plt.show()
+    
+    
+    #plot_spectrogram(spec, title = 'Original')
+    #plot_spectrogram(spec_noise, title = 'Noise')
+    #plot_spectrogram(spec_stft_conv, title = 'STFT convolve')
+    #plot_spectrogram(spec_aug, title = 'SpecAugment')
+    #plot_spectrogram(spec_blur, title = 'SpecBlur')
+    
     
 def pad_waveform(waveform, target_length):
     current_length = waveform.shape[-1]
@@ -116,8 +164,8 @@ def one_hot_encode(class_label, labels):
     one_hot_vector[index] = 1
     return one_hot_vector
 
-def add_noise(waveform):
-    return waveform + torch.randn(waveform.size())*0.17*waveform.max()
+def add_noise(waveform, energy = 0.15):
+    return waveform + torch.randn(waveform.size()) * energy * waveform.max()
     
 def add_spec_aug(spectrogram, F=27, T=10, num_freq_masks=2, num_time_masks=2):
     augmented_spectrogram = spectrogram.clone()
@@ -151,7 +199,7 @@ def gaussian_kernel(kernel_size, sigma_x, sigma_y):
 
     return gauss_kernel
 
-def blur_tensor(tensor, kernel_size=5, sigma_x=1.5, sigma_y=1.5):
+def blur_tensor(tensor, kernel_size=11, sigma_x=1.5, sigma_y=1.5):
     assert len(tensor.shape) == 3, "Input tensor must have 3 dimensions (1, H, W)"
 
     kernel = gaussian_kernel(kernel_size, sigma_x, sigma_y)
@@ -166,23 +214,57 @@ def blur_tensor(tensor, kernel_size=5, sigma_x=1.5, sigma_y=1.5):
 
     return blurred_tensor
 
-def add_spec_blur(spec, sigma_x = 2.0, sigma_y = 1.0):
-    blurred = blur_tensor(spec, sigma_x = sigma_x, sigma_y = sigma_y)
+def add_spec_blur(spec, sigma_time = 3.0, sigma_freq = 2.0):
+    blurred = blur_tensor(spec, sigma_x = sigma_time, sigma_y = sigma_freq)
     
-    #let's normalize again
     blurred -= blurred.min()
     blurred /= blurred.max()
     return blurred
+
+def add_stft_conv(wf, sigma_time = 0.8, sigma_freq = 4):
+    n_fft = 4096
+    win_length = None
+    hop_length = 128
+    
+    stft_transform = torchaudio.transforms.Spectrogram(
+        n_fft=n_fft,
+        win_length=win_length,
+        hop_length=hop_length,
+        center=True,
+        pad_mode="reflect",
+        power=None
+    )
+    
+    # Apply the transform to the audio signal
+    wf = wf.reshape(1, -1)  # Make sure the input tensor has the correct shape
+    
+    stft = stft_transform(wf)
+    
+    blurred_stft_real = blur_tensor(stft.real, sigma_x = sigma_time, sigma_y = sigma_freq)
+    blurred_stft_imag = blur_tensor(stft.imag, sigma_x = sigma_time, sigma_y = sigma_freq)
+    blurred_stft = torch.complex(blurred_stft_real, blurred_stft_imag)
+    
+    istft_transform = torchaudio.transforms.InverseSpectrogram(
+        n_fft=n_fft,
+        win_length=win_length,
+        hop_length=hop_length,
+        center=True,
+        pad_mode="reflect"
+    )
+    
+    recon_wf = istft_transform(blurred_stft)
+    
+    return recon_wf
     
 
-def augment_waveforms(ds, noise = False):
+def augment_waveforms(ds, noise = False, stft_conv = False):
     aug_ds = []
     
     for X, Y in ds:
         if noise:  
             aug_ds.append([add_noise(X), Y])
-            
-        aug_ds.append([X, Y])
+        if stft_conv:
+            aug_ds.append([add_stft_conv(X), Y])
         
     return aug_ds
 
@@ -195,9 +277,7 @@ def augment_spectrogram(ds, spec_aug = False, spec_blur = False):
 
         if spec_blur:
             aug_ds.append([add_spec_blur(X), Y])
-            
-        aug_ds.append([X, Y])
-        
+                    
     return aug_ds
 
 class ResNet34SpectrogramClassifier(nn.Module):
@@ -264,15 +344,19 @@ def setup_dataset(train_images = 100, validation_images = 100, test_images = 100
     
     #before converting into spectrograms for training, we do some data augmentation
     print('Performing waveform augmentations')
-    train_dataset = augment_waveforms(train_dataset, noise = aug[0])
+    train_dataset_wf_aug = augment_waveforms(train_dataset, noise = aug[0], stft_conv = aug[3])
 
     print("Computing spectrograms")
     train_dataset = [[waveform_to_spectrogram(waveform), label_vec] for [waveform, label_vec] in train_dataset]
+    train_dataset_wf_aug = [[waveform_to_spectrogram(waveform), label_vec] for [waveform, label_vec] in train_dataset_wf_aug]
     validation_dataset = [[waveform_to_spectrogram(waveform), label_vec] for [waveform, label_vec] in validation_dataset]
     test_dataset =  [[waveform_to_spectrogram(waveform), label_vec] for [waveform, label_vec] in test_dataset]
     
     print("Performing spectrogram augmentations")
-    train_dataset = augment_spectrogram(train_dataset, spec_aug = aug[1])
+    train_dataset_spec_aug = augment_spectrogram(train_dataset, spec_aug = aug[1], spec_blur = aug[2])
+    
+    train_dataset += train_dataset_spec_aug
+    train_dataset += train_dataset_wf_aug
     
     return train_dataset, validation_dataset, test_dataset, labels
 
@@ -343,16 +427,8 @@ def average_runs(training_images = 100, validation_images = 100, test_images = 1
 if __name__ == '__main__':
     accs = []
     
-    train_dataset, validation_dataset, test_dataset, labels = load_audio_files('./data/SpeechCommands/speech_commands_v0.02', 1, 1, 1)
-    wf = train_dataset[0][0]
-    wf = pad_waveform(wf, 16000)
-    spec = waveform_to_spectrogram(wf)
-    
-    plot_spectrogram(spec,  title = 'Non-blurred')
-    
-    spec = add_spec_blur(spec, sigma_time = 0.00001, sigma_freq = 1001)
-    plot_spectrogram(spec, title = 'blurred')
-    
+    plot_augmentations()
+
     
     aug = [0, 0, 0, 0]
     #a100, s100 = average_runs(100, 100, 200, 3, aug)
@@ -367,13 +443,6 @@ if __name__ == '__main__':
     pass
 
     
-
-
-
-
-
-
-
 
 
 
