@@ -15,6 +15,9 @@ from torchinfo import summary
 from functools import partial
 import random
 from scipy.ndimage import gaussian_filter
+import time
+from concurrent.futures import ProcessPoolExecutor
+
 
 
 def download_and_save_data():
@@ -59,15 +62,34 @@ def load_audio_files(path: str, train_im, val_im, test_im):
             
     return train, val, test, subdirs
 
-def waveform_to_spectrogram(waveform):
-    # Parameters for the spectrogram
+def waveform_to_spectrogram(waveform, n_fft = 256, win_length = None, hop_length = 128):
+    spec_trans = torchaudio.transforms.Spectrogram(
+        n_fft=n_fft,
+        win_length=win_length,
+        hop_length=hop_length,
+        center=True,
+        pad_mode="reflect",
+        power=1.0,
+    )
+    
+    waveform = waveform.reshape(1, -1)
+    spec = spec_trans(waveform)
+    
+    spec = torchaudio.transforms.AmplitudeToDB()(spec)
+
+        
+    spec -= spec.min()
+    spec /= spec.max()
+
+    return spec
+    
+
+def waveform_to_log_mel_spectrogram(waveform):
     n_fft = 4096
     win_length = None
     hop_length = 256
     n_mels = 256
     
-    
-    # Create the MelSpectrogram transform
     mel_spectrogram_transform = torchaudio.transforms.MelSpectrogram(
         sample_rate=16000,
         n_fft=n_fft,
@@ -80,14 +102,11 @@ def waveform_to_spectrogram(waveform):
         n_mels=n_mels,
     )
     
-    # Apply the transform to the audio signal
     waveform = waveform.reshape(1, -1)  # Make sure the input tensor has the correct shape
     mel_spectrogram = mel_spectrogram_transform(waveform)
     
-    # Convert the power spectrogram to a log scale
     log_mel_spectrogram = torchaudio.transforms.AmplitudeToDB()(mel_spectrogram)
     
-    # Shift and normalize the log-mel spectrogram to have values in the range [0, 1]
     log_mel_spectrogram -= log_mel_spectrogram.min()
     log_mel_spectrogram /= log_mel_spectrogram.max()
 
@@ -104,52 +123,142 @@ def plot_spectrogram(spec, title=None, ylabel='Frequency', aspect='auto', xmax=N
     fig.colorbar(im, ax=axs)
     plt.show()
 
+def plot_spec_blur():
+    #Plots spectrogram and log-mel spectrogram before/after SpecBlur is applied, for use in paper
+    ds, _, _, labels = load_audio_files('./data/SpeechCommands/speech_commands_v0.02', 1, 0, 0)
+    wf = ds[0][0]
+    wf = pad_waveform(wf, 16000)
+    
+    n_fft = 4096
+    hop_length = 256
+    n_mels = 256
+    
+    spec_og = waveform_to_spectrogram(wf, n_fft, hop_length)
+    
+    f_max = 10000
+    n_bins = int(n_fft / 2) + 1
+    max_bin = int(f_max * n_fft / 16000)
+    
+    spec_og = spec_og[:, :max_bin, :]
+    
+    #we've computed a spectrogram, let's blur it and then plot both
+    spec_og_blur = add_spec_blur(spec_og)
+    
+    #then plot log-scale versions of both of these
+    mel_rescale = torchaudio.transforms.MelScale(
+        n_mels, 16000, 0.0, None, n_fft // 2 + 1, 'slaney'
+    )
+        
+    spec_og_lm = mel_rescale(spec_og)
+    spec_og_blur_lm = mel_rescale(spec_og_blur)
+    
+    spectrograms = [spec_og.numpy(), spec_og_blur.numpy(), spec_og_lm.numpy(), spec_og_blur_lm.numpy()]
+    titles = ['Original spectrogram (dB)', 'Blurred spectrogram (dB)', 'Original log-mel spectrogram', 'Mel rescaled blurred spectrogram (dB)']
+    
+    fig, axes = plt.subplots(1, 4, figsize=(20, 4), sharey=False, dpi=1000)
+    
+    for i, spec in enumerate(spectrograms):
+        if i <= 1:
+            im = axes[i].imshow(spec.squeeze(), aspect="auto", origin="lower", extent=[0, 1, 0, f_max])
+        else:
+            im = axes[i].imshow(spec.squeeze(), aspect="auto", origin="lower", extent=[0, 1, 0, 256])
+
+        axes[i].set_title(titles[i])
+        if i == 0:
+            axes[i].set_xlabel('Time[s]')
+        if i == 0:
+            axes[i].set_ylabel('Frequency [Hz]')
+        if i == 2:
+            axes[i].set_ylabel('Mel frequency bin')
+    
+    plt.show()
+
+def plot_stft_conv(save = False):
+    #Plots spectrogram and log-mel spectrogram before/after blurring operator is applied, for use in paper
+    ds, _, _, labels = load_audio_files('./data/SpeechCommands/speech_commands_v0.02', 1, 0, 0)
+    wf = ds[0][0]
+    wf = pad_waveform(wf, 16000)
+    
+    wf_e = wf.pow(2).sum()
+    
+    wf_stft = add_stft_conv(wf, sigma_time = 1.2, sigma_freq = 6)
+    
+    wf_stft_e = wf_stft.pow(2).sum()
+    
+    wf_stft = wf_stft * np.sqrt((wf_e / wf_stft_e))
+    
+    if save:
+        torchaudio.save('before.wav', wf, 16000)
+        torchaudio.save('after.wav', wf_stft, 16000)
+
+    n_fft = 4096
+    hop_length = 256
+    
+    s1 = waveform_to_spectrogram(wf, n_fft, hop_length)
+    s2 = waveform_to_spectrogram(wf_stft, n_fft, hop_length)
+    
+    f_max = 10000
+    n_bins = int(n_fft / 2) + 1
+    max_bin = int(f_max * n_fft / 16000)
+    
+    s1 = s1[:, :max_bin, :]
+    s2 = s2[:, :max_bin, :]
+    
+    s3 = waveform_to_log_mel_spectrogram(wf)
+    s4 = waveform_to_log_mel_spectrogram(wf_stft)
+    
+    spectrograms = [s1.numpy(), s2.numpy(), s3.numpy(), s4.numpy()]
+    titles = ['Original spectrogram (dB)', 'STFT-conv spectrogram (dB)', 'Original log-mel spectrogram', 'STFT-conv log-mel spectrogram']
+    
+    fig, axes = plt.subplots(1, 4, figsize=(20, 4), sharey=False, dpi=1000)
+    
+    for i, spec in enumerate(spectrograms):
+        if i <= 1:
+            im = axes[i].imshow(spec.squeeze(), aspect="auto", origin="lower", extent=[0, 1, 0, f_max])
+        else:
+            im = axes[i].imshow(spec.squeeze(), aspect="auto", origin="lower", extent=[0, 1, 0, 256])
+
+        axes[i].set_title(titles[i])
+        if i == 0:
+            axes[i].set_xlabel('Time[s]')
+        if i == 0:
+            axes[i].set_ylabel('Frequency [Hz]')
+        if i == 2:
+            axes[i].set_ylabel('Mel frequency bin')
+    
+    plt.show()
+
 def plot_augmentations():
     #Plots the summary of augmentation methods presented in the paper
-    train_dataset, validation_dataset, test_dataset, labels = load_audio_files('./data/SpeechCommands/speech_commands_v0.02', 1, 0, 0)
-    wf = train_dataset[0][0]
+    ds, _, _, labels = load_audio_files('./data/SpeechCommands/speech_commands_v0.02', 1, 0, 0)
+    wf = ds[0][0]
     wf = pad_waveform(wf, 16000)
     
     wf_noise = add_noise(wf)
     wf_stft_conv = add_stft_conv(wf)
     
-    spec = waveform_to_spectrogram(wf)
-    spec_noise = waveform_to_spectrogram(wf_noise)
-    spec_stft_conv = waveform_to_spectrogram(wf_stft_conv)
+    spec = waveform_to_log_mel_spectrogram(wf)
+    spec_noise = waveform_to_log_mel_spectrogram(wf_noise)
+    spec_stft_conv = waveform_to_log_mel_spectrogram(wf_stft_conv)
     spec_aug = add_spec_aug(spec)
     spec_blur = add_spec_blur(spec)
     
-    spectrograms = [spec.numpy(), spec_noise.numpy(), spec_stft_conv.numpy(), spec_aug.numpy(), spec_blur.numpy()]
-    titles = ['Original', 'White noise', 'STFT convolved', 'SpecAugment', 'SpecBlur']
+    spectrograms = [spec.numpy(), spec_noise.numpy(), spec_aug.numpy(), spec_stft_conv.numpy(), spec_blur.numpy()]
+    titles = ['Original', 'White noise', 'SpecAugment', 'STFT convolved', 'SpecBlur']
     
-    # Set up the figure and the subplots
-    fig, axes = plt.subplots(1, 5, figsize=(15, 3), sharey=True, dpi=1000)
-    fig.subplots_adjust(right=0.83)
-    cbar_ax = fig.add_axes([0.85, 0.15, 0.015, 0.6])
+    fig, axes = plt.subplots(1, 5, figsize=(20, 4), sharey=True, dpi=1000)
     
-    # Plot the spectrograms
     for i, spec in enumerate(spectrograms):
         im = axes[i].imshow(spec.squeeze(), aspect="auto", origin="lower", extent=[0, 1, 0, 256])
         axes[i].set_title(titles[i])
         if i == 2:
-            axes[i].set_xlabel("Time [s]")
+            axes[i].set_xlabel('Time[s]')
         if i == 0:
-            axes[i].set_ylabel("Mel frequency bin")
+            axes[i].set_ylabel('Mel frequency bin')
     
-    # Add a smaller colorbar
-    fig.colorbar(im, cax=cbar_ax)
     
-    # Show the plot
     plt.show()
-    
-    
-    #plot_spectrogram(spec, title = 'Original')
-    #plot_spectrogram(spec_noise, title = 'Noise')
-    #plot_spectrogram(spec_stft_conv, title = 'STFT convolve')
-    #plot_spectrogram(spec_aug, title = 'SpecAugment')
-    #plot_spectrogram(spec_blur, title = 'SpecBlur')
-    
-    
+        
 def pad_waveform(waveform, target_length):
     current_length = waveform.shape[-1]
     if current_length < target_length:
@@ -203,11 +312,12 @@ def blur_tensor(tensor, kernel_size=11, sigma_x=1.5, sigma_y=1.5):
     assert len(tensor.shape) == 3, "Input tensor must have 3 dimensions (1, H, W)"
 
     kernel = gaussian_kernel(kernel_size, sigma_x, sigma_y)
+    
     kernel = kernel.expand(tensor.shape[0], -1, -1, -1)
 
     # Pad the tensor to avoid boundary issues during convolution
     pad_size = kernel_size // 2
-    padded_tensor = F.pad(tensor, (pad_size, pad_size, pad_size, pad_size), mode='reflect')
+    padded_tensor = F.pad(tensor, (pad_size, pad_size, pad_size, pad_size))
 
     # Convolve the tensor with the Gaussian kernel
     blurred_tensor = F.conv2d(padded_tensor, kernel, stride=1, padding=0, groups=tensor.shape[0])
@@ -347,10 +457,10 @@ def setup_dataset(train_images = 100, validation_images = 100, test_images = 100
     train_dataset_wf_aug = augment_waveforms(train_dataset, noise = aug[0], stft_conv = aug[3])
 
     print("Computing spectrograms")
-    train_dataset = [[waveform_to_spectrogram(waveform), label_vec] for [waveform, label_vec] in train_dataset]
-    train_dataset_wf_aug = [[waveform_to_spectrogram(waveform), label_vec] for [waveform, label_vec] in train_dataset_wf_aug]
-    validation_dataset = [[waveform_to_spectrogram(waveform), label_vec] for [waveform, label_vec] in validation_dataset]
-    test_dataset =  [[waveform_to_spectrogram(waveform), label_vec] for [waveform, label_vec] in test_dataset]
+    train_dataset = [[waveform_to_log_mel_spectrogram(waveform), label_vec] for [waveform, label_vec] in train_dataset]
+    train_dataset_wf_aug = [[waveform_to_log_mel_spectrogram(waveform), label_vec] for [waveform, label_vec] in train_dataset_wf_aug]
+    validation_dataset = [[waveform_to_log_mel_spectrogram(waveform), label_vec] for [waveform, label_vec] in validation_dataset]
+    test_dataset =  [[waveform_to_log_mel_spectrogram(waveform), label_vec] for [waveform, label_vec] in test_dataset]
     
     print("Performing spectrogram augmentations")
     train_dataset_spec_aug = augment_spectrogram(train_dataset, spec_aug = aug[1], spec_blur = aug[2])
@@ -421,17 +531,63 @@ def full_run(training_images = 100, validation_images = 100, test_images = 100, 
     return test_acc
 
 def average_runs(training_images = 100, validation_images = 100, test_images = 100, loops = 1, aug = [0, 0, 0, 0]):
-    accs = np.array([full_run(training_images, validation_images, test_images, aug) for _ in range(loops)])
-    return accs.mean(), accs.std()
+    t0 = time.time()
+    accs = []
+    for i in range(loops):
+        print('Starting run {}/{} with augmentation'.format(i+1, loops))
+        print(aug)
+        accs.append(full_run(training_images, validation_images, test_images, aug))
+        
+    accs = np.array(accs)
+    dt = time.time() - t0
+    
+    return accs.mean(), accs.std(), dt/60
+
+def rep_acc(ac, sd):
+    print('{:.1f} \pm {:.1f}'.format(ac, sd))
 
 if __name__ == '__main__':
     accs = []
+    #White, SpecAug, STFTconv, SpecBlur
+    aug = [0, 0, 0, 0]
     
-    plot_augmentations()
+    #plot_augmentations()
+    #plot_stft_conv()
+    plot_spec_blur()
+    
+    #a, s, t =     average_runs(600, 100, 200, 12, [0,0,0,0])
+    #awn, swn, t = average_runs(600, 100, 200, 5, [1,0,0,0])
+    #asa, ssa, t1 = average_runs(600, 100, 200, 5, [0,1,0,0])
+    #ast, sst, t2 = average_runs(600, 100, 200, 5, [0,0,1,0])
+    #asb, ssb, t3 = average_runs(600, 100, 200, 5, [0,0,0,1])
+    #aol, sol, t4 = average_runs(600, 100, 200, 5, [1,1,0,0])
+    ae, se, t5   = average_runs(600, 100, 200, 9, [1,1,1,1])
+    
+    #rep_acc(a, s)
+    #rep_acc(awn, swn)
+    #rep_acc(asa, ssa)
+    #rep_acc(aol, sol)
+    #rep_acc(ast, sst)
+    #rep_acc(asb, ssb)
+    #rep_acc(ae, se)
+    
+    #rep_acc(a,s)
+    #rep_acc(awn, swn)
+    
+    
+    
+    #ault, sult, tult   = average_runs(1350, 100, 100, 5, [1,1,1,1])
+    
+    
+    
+    
+    #a1, s1 = average_runs(100, 100, 200, 7, [1,1,0,0])
+    #a2, s2 = average_runs(100, 100, 200, 7, [1,1,0,1])
+    #a3, s3 = average_runs(100, 100, 200, 7, [1,0,1,1])
 
     
-    aug = [0, 0, 0, 0]
-    #a100, s100 = average_runs(100, 100, 200, 3, aug)
+
+    
     #a300, s300 = average_runs(300, 100, 200, 3, aug)
     #a600, s600 = average_runs(600, 100, 200, 3, aug)
     #a1000, s1000 = average_runs(1000, 100, 200, 3, aug)
@@ -443,10 +599,16 @@ if __name__ == '__main__':
     pass
 
     
+"""
+Samples used for current results
+100:   7
+300:   6
+600:   ?
+1000:  3
 
 
 
-
+"""
 
 
 """
