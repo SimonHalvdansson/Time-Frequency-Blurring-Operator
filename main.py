@@ -77,7 +77,6 @@ def waveform_to_spectrogram(waveform, n_fft = 256, win_length = None, hop_length
     
     spec = torchaudio.transforms.AmplitudeToDB()(spec)
 
-        
     spec -= spec.min()
     spec /= spec.max()
 
@@ -155,7 +154,7 @@ def plot_spec_blur():
     spectrograms = [spec_og.numpy(), spec_og_blur.numpy(), spec_og_lm.numpy(), spec_og_blur_lm.numpy()]
     titles = ['Original spectrogram (dB)', 'Blurred spectrogram (dB)', 'Original log-mel spectrogram', 'Mel rescaled blurred spectrogram (dB)']
     
-    fig, axes = plt.subplots(1, 4, figsize=(20, 4), sharey=False, dpi=1000)
+    fig, axes = plt.subplots(1, 4, figsize=(20, 4), sharey=False, dpi=300)
     
     for i, spec in enumerate(spectrograms):
         if i <= 1:
@@ -169,6 +168,31 @@ def plot_spec_blur():
         if i == 0:
             axes[i].set_ylabel('Frequency [Hz]')
         if i == 2:
+            axes[i].set_ylabel('Mel frequency bin')
+    
+    plt.show()
+
+def plot_lm_spec_blur():
+    #For use in paper
+    ds, _, _, labels = load_audio_files('./data/SpeechCommands/speech_commands_v0.02', 1, 0, 0)
+    wf = ds[0][0]
+    wf = pad_waveform(wf, 16000)
+    
+    spec = waveform_to_log_mel_spectrogram(wf)
+    spec_blur = add_spec_blur(spec)
+    
+    spectrograms = [spec.numpy(), spec_blur.numpy()]
+    titles = ['Original log-mel spectrogram', 'Blurred log-mel spectrogram']
+    
+    fig, axes = plt.subplots(1, 2, figsize=(10, 4), sharey=False, dpi=300)
+    
+    for i, spec in enumerate(spectrograms):
+        im = axes[i].imshow(spec.squeeze(), aspect="auto", origin="lower", extent=[0, 1, 0, 256])
+
+        axes[i].set_title(titles[i])
+        if i == 0:
+            axes[i].set_xlabel('Time[s]')
+        if i == 0:
             axes[i].set_ylabel('Mel frequency bin')
     
     plt.show()
@@ -210,7 +234,7 @@ def plot_stft_conv(save = False):
     spectrograms = [s1.numpy(), s2.numpy(), s3.numpy(), s4.numpy()]
     titles = ['Original spectrogram (dB)', 'STFT-conv spectrogram (dB)', 'Original log-mel spectrogram', 'STFT-conv log-mel spectrogram']
     
-    fig, axes = plt.subplots(1, 4, figsize=(20, 4), sharey=False, dpi=1000)
+    fig, axes = plt.subplots(1, 4, figsize=(20, 4), sharey=False, dpi=300)
     
     for i, spec in enumerate(spectrograms):
         if i <= 1:
@@ -246,7 +270,7 @@ def plot_augmentations():
     spectrograms = [spec.numpy(), spec_noise.numpy(), spec_aug.numpy(), spec_stft_conv.numpy(), spec_blur.numpy()]
     titles = ['Original', 'White noise', 'SpecAugment', 'STFT convolved', 'SpecBlur']
     
-    fig, axes = plt.subplots(1, 5, figsize=(20, 4), sharey=True, dpi=1000)
+    fig, axes = plt.subplots(1, 5, figsize=(20, 4), sharey=True, dpi=300)
     
     for i, spec in enumerate(spectrograms):
         im = axes[i].imshow(spec.squeeze(), aspect="auto", origin="lower", extent=[0, 1, 0, 256])
@@ -317,7 +341,7 @@ def blur_tensor(tensor, kernel_size=11, sigma_x=1.5, sigma_y=1.5):
 
     # Pad the tensor to avoid boundary issues during convolution
     pad_size = kernel_size // 2
-    padded_tensor = F.pad(tensor, (pad_size, pad_size, pad_size, pad_size))
+    padded_tensor = F.pad(tensor, (pad_size, pad_size, pad_size, pad_size), mode='reflect')
 
     # Convolve the tensor with the Gaussian kernel
     blurred_tensor = F.conv2d(padded_tensor, kernel, stride=1, padding=0, groups=tensor.shape[0])
@@ -553,15 +577,16 @@ if __name__ == '__main__':
     
     #plot_augmentations()
     #plot_stft_conv()
-    plot_spec_blur()
+    #plot_spec_blur()
+    plot_lm_spec_blur()
     
-    #a, s, t =     average_runs(600, 100, 200, 12, [0,0,0,0])
-    #awn, swn, t = average_runs(600, 100, 200, 5, [1,0,0,0])
-    #asa, ssa, t1 = average_runs(600, 100, 200, 5, [0,1,0,0])
-    #ast, sst, t2 = average_runs(600, 100, 200, 5, [0,0,1,0])
-    #asb, ssb, t3 = average_runs(600, 100, 200, 5, [0,0,0,1])
-    #aol, sol, t4 = average_runs(600, 100, 200, 5, [1,1,0,0])
-    ae, se, t5   = average_runs(600, 100, 200, 9, [1,1,1,1])
+    #a, s, t =     average_runs(1000, 100, 200, 12, [0,0,0,0])
+    #awn, swn, t = average_runs(1000, 100, 200, 5, [1,0,0,0])
+    #asa, ssa, t1 = average_runs(1000, 100, 200, 5, [0,1,0,0])
+    #ast, sst, t2 = average_runs(1000, 100, 200, 5, [0,0,1,0])
+    #asb, ssb, t3 = average_runs(1000, 100, 200, 5, [0,0,0,1])
+    #aol, sol, t4 = average_runs(1000, 100, 200, 5, [1,1,0,0])
+    #ae, se, t5   = average_runs(1000, 100, 200, 8, [1,1,1,1])
     
     #rep_acc(a, s)
     #rep_acc(awn, swn)
