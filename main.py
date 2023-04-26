@@ -17,7 +17,7 @@ import random
 from scipy.ndimage import gaussian_filter
 import time
 from concurrent.futures import ProcessPoolExecutor
-
+import pickle
 
 
 def download_and_save_data():
@@ -567,18 +567,122 @@ def average_runs(training_images = 100, validation_images = 100, test_images = 1
     
     return accs.mean(), accs.std(), dt/60
 
-def rep_acc(ac, sd):
-    print('{:.1f} \pm {:.1f}'.format(ac, sd))
+def format_acc(ac, sd):
+    return '{:.1f} \pm {:.1f}'.format(ac, sd)    
+
+def find_suitable_index(accs, counts, augs):
+    #First check if there's an index with too little data
+    for count_ind in range(len(counts)):
+        for aug_ind in range(len(augs)):
+            if len(accs[count_ind][aug_ind]) < 3:
+                print('Config with count:{} and aug:{} had <3 data, starting training'
+                      .format(counts[count_ind], augs[aug_ind]))
+                return count_ind, aug_ind
+            
+    #new we check where we have the largest std
+    std_max = 0
+    std_max_count_ind = None
+    std_max_aug_ind = None
+    for count_ind in range(len(counts)):
+        for aug_ind in range(len(augs)):
+            std = accs[count_ind][aug_ind].std()
+            if std > std_max:
+                std_max = std
+                std_max_count_ind = count_ind
+                std_max_aug_ind = aug_ind
+                
+    print('Maximum std config, count: {}, aug: {}, starting training'
+              .format(counts[std_max_count_ind], augs[std_max_aug_ind]))    
+    return std_max_count_ind, std_max_aug_ind
+
+def load_accs():
+    file = open('accs', 'rb')
+    res = pickle.load(file)
+    file.close()
+    
+    return res
+
+def save_accs(res):
+    file = open('accs', 'wb')
+    pickle.dump(res, file)
+    file.close()
+
+def improve(counts, augs, report_accs = True, new = False):
+    
+    if new:
+        res = []
+        for count in counts:
+            count_results = []
+            for aug in augs:              
+                count_results.append(np.array([]))
+            
+            res.append(count_results)
+        save_accs(res)
+    
+    if report_accs:
+        print('Starting improve run, starting setup:')
+        report_acc_stats(counts, augs)
+        
+    
+    while True:
+        accs = load_accs()
+        
+        conf_count_ind, conf_aug_ind = find_suitable_index(accs, counts, augs)
+        count = counts[conf_count_ind]
+        aug = augs[conf_aug_ind]
+        
+        acc = full_run(round(count * 0.8), round(count * 0.2), 200, aug)
+        accs[conf_count_ind][conf_aug_ind].append(acc)
+        print('Added test accuracy {:.2f} to count: {}, aug:{}'.format(acc, count, aug))
+        
+        if report_accs:
+            report_acc_stats(counts, augs)
+        
+        save_accs(accs)
+    
+def report_acc_stats(counts, augs):
+    accs = load_accs()
+    
+    counts = [ [ len(accs[count_ind][aug_ind]) for aug_ind in range(len(augs)) ] for count_ind in range(len(counts))]
+    
+    print('Counts for each config: ')
+    print(counts)
+    
+    if np.array(counts).min() > 0:
+        print('Standard deviation for each config')
+        stds = [ [ '{:.2f}'.format(accs[count_ind][aug_ind].std()) for aug_ind in range(len(augs)) ] for count_ind in range(len(counts))]
+        print(stds)
+    
+    
+            
 
 if __name__ == '__main__':
-    accs = []
-    #White, SpecAug, STFTconv, SpecBlur
-    aug = [0, 0, 0, 0]
+    counts = [100, 300, 600, 1000]
+    
+    augs = [[0,0,0,0],  #none
+            [1,0,0,0],  #white noise
+            [0,1,0,0],  #spec augment
+            [0,0,1,0],  #stft conv
+            [1,0,0,1],  #specblur
+            [1,1,0,0],  #white noise + specaug
+            [0,0,1,1],  #stft conv + specblur
+            [1,1,1,1]]  #everything
+
+
+
+
     
     #plot_augmentations()
     #plot_stft_conv()
     #plot_spec_blur()
-    plot_lm_spec_blur()
+    #plot_lm_spec_blur()
+    
+    improve(counts, augs)
+    
+    
+    
+    
+    
     
     #a, s, t =     average_runs(1000, 100, 200, 12, [0,0,0,0])
     #awn, swn, t = average_runs(1000, 100, 200, 5, [1,0,0,0])
@@ -587,43 +691,16 @@ if __name__ == '__main__':
     #asb, ssb, t3 = average_runs(1000, 100, 200, 5, [0,0,0,1])
     #aol, sol, t4 = average_runs(1000, 100, 200, 5, [1,1,0,0])
     #ae, se, t5   = average_runs(1000, 100, 200, 8, [1,1,1,1])
-    
-    #rep_acc(a, s)
-    #rep_acc(awn, swn)
-    #rep_acc(asa, ssa)
-    #rep_acc(aol, sol)
-    #rep_acc(ast, sst)
-    #rep_acc(asb, ssb)
-    #rep_acc(ae, se)
-    
-    #rep_acc(a,s)
-    #rep_acc(awn, swn)
-    
-    
-    
-    #ault, sult, tult   = average_runs(1350, 100, 100, 5, [1,1,1,1])
-    
-    
-    
-    
-    #a1, s1 = average_runs(100, 100, 200, 7, [1,1,0,0])
-    #a2, s2 = average_runs(100, 100, 200, 7, [1,1,0,1])
-    #a3, s3 = average_runs(100, 100, 200, 7, [1,0,1,1])
 
     
-
-    
-    #a300, s300 = average_runs(300, 100, 200, 3, aug)
-    #a600, s600 = average_runs(600, 100, 200, 3, aug)
-    #a1000, s1000 = average_runs(1000, 100, 200, 3, aug)
-
         
-
 
 
     pass
 
     
+
+
 """
 Samples used for current results
 100:   7
@@ -634,59 +711,4 @@ Samples used for current results
 
 
 """
-
-
-"""
-class ConvNeXtTinySpectrogramClassifier(nn.Module):
-    def __init__(self, num_classes):
-        super().__init__()
-        self.convnext = models.convnext.convnext_tiny(weights=None)
-
-        # Modify the first layer to accept a single channel input
-        firstconv_output_channels = 96  # From the block_setting of convnext_tiny
-        self.convnext.features[0] = models.convnext.Conv2dNormActivation(
-            1,
-            firstconv_output_channels,
-            kernel_size=4,
-            stride=4,
-            padding=0,
-            norm_layer=partial(models.convnext.LayerNorm2d, eps=1e-6),
-            activation_layer=None,
-            bias=True,
-        )
-
-        # Modify the last layer to have the desired number of output classes
-        lastconv_output_channels = 768  # From the last CNBlockConfig of convnext_tiny
-        self.convnext.classifier[-1] = nn.Linear(lastconv_output_channels, num_classes)
-
-    def forward(self, x):
-        return self.convnext(x)
-
-class ConvNeXtSmallSpectrogramClassifier(nn.Module):
-    def __init__(self, num_classes):
-        super().__init__()
-        self.convnext = models.convnext.convnext_small(weights=None)
-
-        # Modify the first layer to accept a single channel input
-        firstconv_output_channels = 96  # From the block_setting of convnext_small
-        self.convnext.features[0] = models.convnext.Conv2dNormActivation(
-            1,
-            firstconv_output_channels,
-            kernel_size=4,
-            stride=4,
-            padding=0,
-            norm_layer=partial(models.convnext.LayerNorm2d, eps=1e-6),
-            activation_layer=None,
-            bias=True,
-        )
-
-        # Modify the last layer to have the desired number of output classes
-        lastconv_output_channels = 768  # From the last CNBlockConfig of convnext_tiny
-        self.convnext.classifier[-1] = nn.Linear(lastconv_output_channels, num_classes)
-
-    def forward(self, x):
-        return self.convnext(x)
-"""
-
-
 
