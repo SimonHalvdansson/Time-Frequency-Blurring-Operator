@@ -639,6 +639,23 @@ def improve(report_accs = True, new = False):
         
         save_accs(accs)
     
+def export_results(accs = None):
+    if accs == None:
+        accs = load_accs()
+        
+    aug_names = ['None', 'White noise', 'SpecAugment', 'STFT-blur', 'SpecBlur', 'White noise + SpecAug', 'STFT-blur + SpecBlur', 'All']
+    
+    for aug_ind in range(len(CONFIG_AUGS)):
+        s = aug_names[aug_ind]
+        for count_ind in range(len(CONFIG_COUNTS)):
+            avg, std = accs[count_ind][aug_ind].mean(), accs[count_ind][aug_ind].std()
+            
+            s += ' & '
+            s += format_acc(avg, std)
+            s += '\\'
+            
+        print(s)
+                
 def report_acc_stats(accs = None):
     if accs == None:
         accs = load_accs()
