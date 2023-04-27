@@ -570,21 +570,21 @@ def average_runs(training_images = 100, validation_images = 100, test_images = 1
 def format_acc(ac, sd):
     return '{:.1f} \pm {:.1f}'.format(ac, sd)    
 
-def find_suitable_index(accs, counts, augs):
+def find_suitable_index(accs):
     #First check if there's an index with too little data
-    for count_ind in range(len(counts)):
-        for aug_ind in range(len(augs)):
+    for count_ind in range(len(CONFIG_COUNTS)):
+        for aug_ind in range(len(CONFIG_AUGS)):
             if len(accs[count_ind][aug_ind]) < 3:
-                print('Config with count:{} and aug:{} had <3 data, starting training'
-                      .format(counts[count_ind], augs[aug_ind]))
+                print('Config with count: {} and aug: {} had < 3 data, starting training'
+                      .format(CONFIG_COUNTS[count_ind], CONFIG_AUGS[aug_ind]))
                 return count_ind, aug_ind
             
     #new we check where we have the largest std
     std_max = 0
     std_max_count_ind = None
     std_max_aug_ind = None
-    for count_ind in range(len(counts)):
-        for aug_ind in range(len(augs)):
+    for count_ind in range(len(CONFIG_COUNTS)):
+        for aug_ind in range(len(CONFIG_AUGS)):
             std = accs[count_ind][aug_ind].std()
             if std > std_max:
                 std_max = std
@@ -592,7 +592,7 @@ def find_suitable_index(accs, counts, augs):
                 std_max_aug_ind = aug_ind
                 
     print('Maximum std config, count: {}, aug: {}, starting training'
-              .format(counts[std_max_count_ind], augs[std_max_aug_ind]))    
+              .format(CONFIG_COUNTS[std_max_count_ind], CONFIG_AUGS[std_max_aug_ind]))    
     return std_max_count_ind, std_max_aug_ind
 
 def load_accs():
@@ -607,13 +607,12 @@ def save_accs(res):
     pickle.dump(res, file)
     file.close()
 
-def improve(counts, augs, report_accs = True, new = False):
-    
+def improve(report_accs = True, new = False):
     if new:
         res = []
-        for count in counts:
+        for count in CONFIG_COUNTS:
             count_results = []
-            for aug in augs:              
+            for aug in CONFIG_AUGS:              
                 count_results.append(np.array([]))
             
             res.append(count_results)
@@ -621,94 +620,78 @@ def improve(counts, augs, report_accs = True, new = False):
     
     if report_accs:
         print('Starting improve run, starting setup:')
-        report_acc_stats(counts, augs)
+        report_acc_stats()
         
     
     while True:
         accs = load_accs()
         
-        conf_count_ind, conf_aug_ind = find_suitable_index(accs, counts, augs)
-        count = counts[conf_count_ind]
-        aug = augs[conf_aug_ind]
+        conf_count_ind, conf_aug_ind = find_suitable_index(accs)
+        count = CONFIG_COUNTS[conf_count_ind]
+        aug = CONFIG_AUGS[conf_aug_ind]
         
         acc = full_run(round(count * 0.8), round(count * 0.2), 200, aug)
-        accs[conf_count_ind][conf_aug_ind].append(acc)
-        print('Added test accuracy {:.2f} to count: {}, aug:{}'.format(acc, count, aug))
+        accs[conf_count_ind][conf_aug_ind] = np.append(accs[conf_count_ind][conf_aug_ind], acc)
+        print('Added test accuracy {:.2f}% to count: {}, aug: {}'.format(acc, count, aug))
         
         if report_accs:
-            report_acc_stats(counts, augs)
+            report_acc_stats(accs)
         
         save_accs(accs)
     
-def report_acc_stats(counts, augs):
-    accs = load_accs()
+def report_acc_stats(accs = None):
+    if accs == None:
+        accs = load_accs()
     
-    counts = [ [ len(accs[count_ind][aug_ind]) for aug_ind in range(len(augs)) ] for count_ind in range(len(counts))]
-    
+    counts = [ [ len(accs[count_ind][aug_ind]) for aug_ind in range(len(CONFIG_AUGS)) ] for count_ind in range(len(CONFIG_COUNTS))]
+    print('')
     print('Counts for each config: ')
     print(counts)
     
     if np.array(counts).min() > 0:
         print('Standard deviation for each config')
-        stds = [ [ '{:.2f}'.format(accs[count_ind][aug_ind].std()) for aug_ind in range(len(augs)) ] for count_ind in range(len(counts))]
+        stds = [ [ '{:.2f}'.format(accs[count_ind][aug_ind].std()) for aug_ind in range(len(CONFIG_AUGS)) ] for count_ind in range(len(CONFIG_COUNTS))]
         print(stds)
     
     
-            
+CONFIG_COUNTS = [100, 300, 600, 1000]
 
-if __name__ == '__main__':
-    counts = [100, 300, 600, 1000]
-    
-    augs = [[0,0,0,0],  #none
-            [1,0,0,0],  #white noise
-            [0,1,0,0],  #spec augment
-            [0,0,1,0],  #stft conv
-            [1,0,0,1],  #specblur
-            [1,1,0,0],  #white noise + specaug
-            [0,0,1,1],  #stft conv + specblur
-            [1,1,1,1]]  #everything
+CONFIG_AUGS = [[0,0,0,0],  #none
+        [1,0,0,0],  #white noise
+        [0,1,0,0],  #spec augment
+        [0,0,1,0],  #stft conv
+        [1,0,0,1],  #specblur
+        [1,1,0,0],  #white noise + specaug
+        [0,0,1,1],  #stft conv + specblur
+        [1,1,1,1]]  #everything
 
-
-
-
-    
+if __name__ == '__main__':   
     #plot_augmentations()
     #plot_stft_conv()
     #plot_spec_blur()
     #plot_lm_spec_blur()
     
-    improve(counts, augs)
+    improve()
     
-    
-    
-    
-    
-    
-    #a, s, t =     average_runs(1000, 100, 200, 12, [0,0,0,0])
-    #awn, swn, t = average_runs(1000, 100, 200, 5, [1,0,0,0])
-    #asa, ssa, t1 = average_runs(1000, 100, 200, 5, [0,1,0,0])
-    #ast, sst, t2 = average_runs(1000, 100, 200, 5, [0,0,1,0])
-    #asb, ssb, t3 = average_runs(1000, 100, 200, 5, [0,0,0,1])
-    #aol, sol, t4 = average_runs(1000, 100, 200, 5, [1,1,0,0])
-    #ae, se, t5   = average_runs(1000, 100, 200, 8, [1,1,1,1])
-
-    
-        
-
-
     pass
 
     
 
 
-"""
-Samples used for current results
-100:   7
-300:   6
-600:   ?
-1000:  3
 
 
 
-"""
+
+
+
+
+
+
+
+
+
+
+
+
+
 
