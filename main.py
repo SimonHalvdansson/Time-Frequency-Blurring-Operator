@@ -150,9 +150,9 @@ def plot_spec_blur():
         
     spec_og_lm = mel_rescale(spec_og)
     spec_og_blur_lm = mel_rescale(spec_og_blur)
-    
+        
     spectrograms = [spec_og.numpy(), spec_og_blur.numpy(), spec_og_lm.numpy(), spec_og_blur_lm.numpy()]
-    titles = ['Original spectrogram (dB)', 'Blurred spectrogram (dB)', 'Original log-mel spectrogram', 'Mel rescaled blurred spectrogram (dB)']
+    titles = ['Original spectrogram (dB)', 'Blurred spectrogram (dB)', 'Mel rescaled original spectrogram (dB)', 'Mel rescaled blurred spectrogram (dB)']
     
     fig, axes = plt.subplots(1, 4, figsize=(20, 4), sharey=False, dpi=300)
     
@@ -541,7 +541,8 @@ def full_run(training_images = 100, validation_images = 100, test_images = 100, 
         if (t - best_epoch) > 2:
             break
     
-        
+    print('Training done, computing test performance')
+    
     test_dataloader = torch.utils.data.DataLoader(
         test_dataset,
         batch_size=32,
@@ -567,31 +568,33 @@ def average_runs(training_images = 100, validation_images = 100, test_images = 1
     
     return accs.mean(), accs.std(), dt/60
 
-def format_acc(ac, sd):
-    return '{:.1f} \pm {:.1f}'.format(ac, sd)    
+def format_acc(ac, se):
+    return '{:.1f} \pm {:.1f}'.format(ac, se)    
 
 def find_suitable_index(accs):
+    COUNT_LIMIT = 6
+    
     #First check if there's an index with too little data
     for count_ind in range(len(CONFIG_COUNTS)):
         for aug_ind in range(len(CONFIG_AUGS)):
-            if len(accs[count_ind][aug_ind]) < 3:
-                print('Config with count: {} and aug: {} had < 3 data, starting training'
-                      .format(CONFIG_COUNTS[count_ind], CONFIG_AUGS[aug_ind]))
+            if len(accs[count_ind][aug_ind]) < COUNT_LIMIT:
+                print('Config with count: {} and aug: {} had < {} data, starting training'
+                      .format(CONFIG_COUNTS[count_ind], CONFIG_AUGS[aug_ind], COUNT_LIMIT))
                 return count_ind, aug_ind
             
-    #new we check where we have the largest std
+    #new we check where we have the largest std/sqrt(n) because this is the error of the esimator
     std_max = 0
     std_max_count_ind = None
     std_max_aug_ind = None
     for count_ind in range(len(CONFIG_COUNTS)):
         for aug_ind in range(len(CONFIG_AUGS)):
-            std = accs[count_ind][aug_ind].std()
+            std = accs[count_ind][aug_ind].std()/np.sqrt(len(accs[count_ind][aug_ind]))
             if std > std_max:
                 std_max = std
                 std_max_count_ind = count_ind
                 std_max_aug_ind = aug_ind
                 
-    print('Maximum std config, count: {}, aug: {}, starting training'
+    print('Maximum SE config, count: {}, aug: {}, starting training'
               .format(CONFIG_COUNTS[std_max_count_ind], CONFIG_AUGS[std_max_aug_ind]))    
     return std_max_count_ind, std_max_aug_ind
 
@@ -648,11 +651,14 @@ def export_results(accs = None):
     for aug_ind in range(len(CONFIG_AUGS)):
         s = aug_names[aug_ind]
         for count_ind in range(len(CONFIG_COUNTS)):
-            avg, std = accs[count_ind][aug_ind].mean(), accs[count_ind][aug_ind].std()
+            samples = accs[count_ind][aug_ind]
+            avg, se = samples.mean(), samples.std()/np.sqrt(len(samples))
             
-            s += ' & '
-            s += format_acc(avg, std)
-            s += '\\'
+            s += ' & $'
+            s += format_acc(avg, se)
+            s += '$'
+            if count_ind == len(CONFIG_COUNTS)-1:
+                s += '\\\\'
             
         print(s)
                 
@@ -666,9 +672,9 @@ def report_acc_stats(accs = None):
     print(counts)
     
     if np.array(counts).min() > 0:
-        print('Standard deviation for each config')
-        stds = [ [ '{:.2f}'.format(accs[count_ind][aug_ind].std()) for aug_ind in range(len(CONFIG_AUGS)) ] for count_ind in range(len(CONFIG_COUNTS))]
-        print(stds)
+        print('Standard error for each config')
+        ses = [ [ '{:.2f}'.format(accs[count_ind][aug_ind].std()/np.sqrt(len(accs[count_ind][aug_ind]))) for aug_ind in range(len(CONFIG_AUGS)) ] for count_ind in range(len(CONFIG_COUNTS))]
+        print(ses)
     
     
 CONFIG_COUNTS = [100, 300, 600, 1000]
@@ -689,6 +695,8 @@ if __name__ == '__main__':
     #plot_lm_spec_blur()
     
     improve()
+    
+    #export_results()
     
     pass
 
