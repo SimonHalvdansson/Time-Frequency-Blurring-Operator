@@ -572,7 +572,7 @@ def format_acc(ac, se):
     return '{:.1f} \pm {:.1f}'.format(ac, se)    
 
 def find_suitable_index(accs):
-    COUNT_LIMIT = 6
+    COUNT_LIMIT = 10
     
     #First check if there's an index with too little data
     for count_ind in range(len(CONFIG_COUNTS)):
@@ -582,21 +582,27 @@ def find_suitable_index(accs):
                       .format(CONFIG_COUNTS[count_ind], CONFIG_AUGS[aug_ind], COUNT_LIMIT))
                 return count_ind, aug_ind
             
-    #new we check where we have the largest std/sqrt(n) because this is the error of the esimator
-    std_max = 0
-    std_max_count_ind = None
-    std_max_aug_ind = None
+    #new we check where we have the largest standard error (std/sqrt(n)) because this is the error of the esimator
+    se_max = 0
+    se_max_count_ind = None
+    se_max_aug_ind = None
+    se_sum = 0
+    
     for count_ind in range(len(CONFIG_COUNTS)):
         for aug_ind in range(len(CONFIG_AUGS)):
-            std = accs[count_ind][aug_ind].std()/np.sqrt(len(accs[count_ind][aug_ind]))
-            if std > std_max:
-                std_max = std
-                std_max_count_ind = count_ind
-                std_max_aug_ind = aug_ind
+            se = accs[count_ind][aug_ind].std()/np.sqrt(len(accs[count_ind][aug_ind]))
+            se_sum += se
+            
+            if se > se_max:
+                se_max = se
+                se_max_count_ind = count_ind
+                se_max_aug_ind = aug_ind
                 
     print('Maximum SE config, count: {}, aug: {}, starting training'
-              .format(CONFIG_COUNTS[std_max_count_ind], CONFIG_AUGS[std_max_aug_ind]))    
-    return std_max_count_ind, std_max_aug_ind
+              .format(CONFIG_COUNTS[se_max_count_ind], CONFIG_AUGS[se_max_aug_ind]))
+    print('Current SE sum: {:.2f}'.format(se_sum))
+    
+    return se_max_count_ind, se_max_aug_ind
 
 def load_accs():
     file = open('accs', 'rb')
