@@ -569,10 +569,11 @@ def average_runs(training_images = 100, validation_images = 100, test_images = 1
     return accs.mean(), accs.std(), dt/60
 
 def format_acc(ac, se):
-    return '{:.1f} \pm {:.1f}'.format(ac, se)    
+    return '{:.2f} \pm {:.2f}'.format(ac, se)
 
 def find_suitable_index(accs):
     COUNT_LIMIT = 10
+    prio_se = True
     
     #First check if there's an index with too little data
     for count_ind in range(len(CONFIG_COUNTS)):
@@ -581,28 +582,70 @@ def find_suitable_index(accs):
                 print('Config with count: {} and aug: {} had < {} data, starting training'
                       .format(CONFIG_COUNTS[count_ind], CONFIG_AUGS[aug_ind], COUNT_LIMIT))
                 return count_ind, aug_ind
-            
-    #new we check where we have the largest standard error (std/sqrt(n)) because this is the error of the esimator
-    se_max = 0
-    se_max_count_ind = None
-    se_max_aug_ind = None
-    se_sum = 0
+        
+        
+    if prio_se:
+        #new we check where we have the largest standard error (std/sqrt(n)) because this is the error of the esimator
+        se_max = 0
+        se_max_count_ind = None
+        se_max_aug_ind = None
+        se_sum = 0
+        
+        for count_ind in range(len(CONFIG_COUNTS)):
+            for aug_ind in range(len(CONFIG_AUGS)):
+                se = accs[count_ind][aug_ind].std()/np.sqrt(len(accs[count_ind][aug_ind]))
+                se_sum += se
+                
+                if se > se_max:
+                    se_max = se
+                    se_max_count_ind = count_ind
+                    se_max_aug_ind = aug_ind
+                    
+        
+                    
+        print('Maximum SE config, count: {}, aug: {}, starting training'
+                  .format(CONFIG_COUNTS[se_max_count_ind], CONFIG_AUGS[se_max_aug_ind]))
+        print('Current SE sum: {:.2f}'.format(se_sum))
+        
+        return se_max_count_ind, se_max_aug_ind
+    
+        
+    rel_se_max_count_ind = 0
+    rel_se_max_aug_ind = 0
+    rel_se_max = 100
     
     for count_ind in range(len(CONFIG_COUNTS)):
-        for aug_ind in range(len(CONFIG_AUGS)):
-            se = accs[count_ind][aug_ind].std()/np.sqrt(len(accs[count_ind][aug_ind]))
-            se_sum += se
-            
-            if se > se_max:
-                se_max = se
-                se_max_count_ind = count_ind
-                se_max_aug_ind = aug_ind
+        
+        this_count_highest_error = 100
+        target_aug_ind = None
+        
+        for aug_ind_i in range(len(CONFIG_AUGS)):
+            for aug_ind_j in range(aug_ind_i + 1, len(CONFIG_AUGS)):
+                data_i = accs[count_ind][aug_ind_i]
+                data_j = accs[count_ind][aug_ind_j]
                 
-    print('Maximum SE config, count: {}, aug: {}, starting training'
-              .format(CONFIG_COUNTS[se_max_count_ind], CONFIG_AUGS[se_max_aug_ind]))
-    print('Current SE sum: {:.2f}'.format(se_sum))
+                mi = data_i.mean()
+                mj = data_j.mean()
+                sei = data_i.std()/np.sqrt(len(data_i))
+                sej = data_j.std()/np.sqrt(len(data_j))
+                val = abs(mi - mj) - sei - sej
+                if val < this_count_highest_error:
+                    this_count_highest_error = val
+                    if sei > sej:
+                        target_aug_ind = aug_ind_i
+                    else:
+                        target_aug_ind = aug_ind_j
+                        
+        #once we've gone through all aug combos, report the results
+        if this_count_highest_error < rel_se_max:
+            rel_se_max = this_count_highest_error
+            rel_se_max_count_ind = count_ind
+            rel_se_max_aug_ind = target_aug_ind
+                            
+    print('Highest difference found associated to count: {}, aug{} where relative SE was: {:.3f}'
+          .format(CONFIG_COUNTS[rel_se_max_count_ind], CONFIG_AUGS[rel_se_max_aug_ind], rel_se_max))
+    return rel_se_max_count_ind, rel_se_max_aug_ind
     
-    return se_max_count_ind, se_max_aug_ind
 
 def load_accs():
     file = open('accs', 'rb')
