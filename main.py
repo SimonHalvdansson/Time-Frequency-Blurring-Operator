@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 
 import os
+import torch
 import torchaudio
 import matplotlib.pyplot as plt
-import torch
 from torch.utils.data import Dataset, DataLoader
 from pathlib import Path
 from torchvision import datasets, transforms, models
@@ -572,7 +572,7 @@ def format_acc(ac, se):
     return '{:.2f} \pm {:.2f}'.format(ac, se)
 
 def find_suitable_index(accs):
-    COUNT_LIMIT = 10
+    COUNT_LIMIT = 15
     prio_se = True
     
     #First check if there's an index with too little data
@@ -593,8 +593,10 @@ def find_suitable_index(accs):
         
         for count_ind in range(len(CONFIG_COUNTS)):
             for aug_ind in range(len(CONFIG_AUGS)):
-                se = accs[count_ind][aug_ind].std()/np.sqrt(len(accs[count_ind][aug_ind]))
-                se_sum += se
+                n = len(accs[count_ind][aug_ind])
+                #we do the derivative instead because we want to decrease se as much as possible
+                se = accs[count_ind][aug_ind].std()/(n**1.5)/CONFIG_COUNTS[count_ind]
+                se_sum += se*n*CONFIG_COUNTS[count_ind]
                 
                 if se > se_max:
                     se_max = se
@@ -695,13 +697,20 @@ def export_results(accs = None):
     if accs == None:
         accs = load_accs()
         
+    print('')
+        
     aug_names = ['None', 'White noise', 'SpecAugment', 'STFT-blur', 'SpecBlur', 'White noise + SpecAug', 'STFT-blur + SpecBlur', 'All']
+    #               0           1             2             3           4                   5                      6               7
+    
+    se_sum = 0
     
     for aug_ind in range(len(CONFIG_AUGS)):
         s = aug_names[aug_ind]
         for count_ind in range(len(CONFIG_COUNTS)):
             samples = accs[count_ind][aug_ind]
             avg, se = samples.mean(), samples.std()/np.sqrt(len(samples))
+            
+            se_sum += se
             
             s += ' & $'
             s += format_acc(avg, se)
@@ -710,7 +719,29 @@ def export_results(accs = None):
                 s += '\\\\'
             
         print(s)
-                
+        
+    print('')
+    print('Sum of standard errors: {:.2f}'.format(se_sum))
+    
+    means = [ [ accs[count_ind][aug_ind].mean() for aug_ind in range(len(CONFIG_AUGS)) ] for count_ind in range(len(CONFIG_COUNTS))]
+    ses = [ [ accs[count_ind][aug_ind].std()/np.sqrt(len(accs[count_ind][aug_ind])) for aug_ind in range(len(CONFIG_AUGS)) ] for count_ind in range(len(CONFIG_COUNTS))]
+    
+    comparisions = [[3,0], [4,0], [5,7], [3,4]]
+    
+    for comp in comparisions:
+        i1 = comp[0]
+        i2 = comp[1]
+        
+        type1 = aug_names[i1]
+        type2 = aug_names[i2]
+        print('')
+        
+        print('{} vs {}:'.format(type1, type2))
+        for count_ind in range(len(CONFIG_COUNTS)):
+            normalized_diff = np.abs(means[count_ind][i1] - means[count_ind][i2])/np.sqrt(ses[count_ind][i1]**2 + ses[count_ind][i2]**2)
+            
+            print('Count: {}, {:.2f} σ'.format(CONFIG_COUNTS[count_ind], normalized_diff))
+
 def report_acc_stats(accs = None):
     if accs == None:
         accs = load_accs()
@@ -732,7 +763,7 @@ CONFIG_AUGS = [[0,0,0,0],  #none
         [1,0,0,0],  #white noise
         [0,1,0,0],  #spec augment
         [0,0,1,0],  #stft conv
-        [1,0,0,1],  #specblur
+        [0,0,0,1],  #specblur
         [1,1,0,0],  #white noise + specaug
         [0,0,1,1],  #stft conv + specblur
         [1,1,1,1]]  #everything
@@ -744,7 +775,6 @@ if __name__ == '__main__':
     #plot_lm_spec_blur()
     
     improve()
-    
     #export_results()
     
     pass
