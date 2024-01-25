@@ -18,6 +18,7 @@ from scipy.ndimage import gaussian_filter
 import time
 from concurrent.futures import ProcessPoolExecutor
 import pickle
+from tinyvit import TinyViT
 
 
 def download_and_save_data():
@@ -428,6 +429,48 @@ class ResNet34SpectrogramClassifier(nn.Module):
     def forward(self, x):
         return self.resnet34(x)
 
+class TinyViTWrapper(nn.Module):
+    def __init__(self, num_classes, img_size=224):
+        super(TinyViTWrapper, self).__init__()
+        self.img_size = img_size
+        
+        model_kwargs_5m = dict(
+            embed_dims=[64, 128, 160, 320],
+            depths=[2, 2, 6, 2],
+            num_heads=[2, 4, 5, 10],
+            window_sizes=[7, 7, 14, 7],
+            drop_path_rate=0.0,
+        )
+        
+        model_kwargs_11m = dict(
+            embed_dims=[64, 128, 256, 448],
+            depths=[2, 2, 6, 2],
+            num_heads=[2, 4, 8, 14],
+            window_sizes=[7, 7, 14, 7],
+            drop_path_rate=0.1,
+        )
+        
+        model_kwargs_21m = dict(
+            embed_dims=[96, 192, 384, 576],
+            depths=[2, 2, 6, 2],
+            num_heads=[3, 6, 12, 18],
+            window_sizes=[7, 7, 14, 7],
+            drop_path_rate=0.2,
+        )
+                
+        self.tiny_vit = TinyViT(img_size=img_size, 
+                                in_chans=1,
+                                num_classes=num_classes,
+                                **model_kwargs_11m)
+
+    def forward(self, x):
+        # Resize image to square (self.img_size x self.img_size)
+        x = torch.nn.functional.interpolate(x, size=(self.img_size, self.img_size), mode='bilinear', align_corners=False)
+
+        # Pass the resized image through TinyViT
+        x = self.tiny_vit(x)
+        return x
+
 
 def train(dataloader, model, loss, optimizer, scheduler, device, cost):
     model.train()
@@ -500,16 +543,16 @@ def full_run(training_images = 100, validation_images = 100, test_images = 100, 
         
     train_dataloader = DataLoader(
         train_dataset,
-        batch_size=32,
-        num_workers=12,
+        batch_size=BATCH_SIZE,
+        num_workers=NUM_WORKERS,
         persistent_workers=True,
         shuffle=True
     )
 
     validation_dataloader = DataLoader(
         validation_dataset,
-        batch_size=32,
-        num_workers=12,
+        batch_size=BATCH_SIZE,
+        num_workers=NUM_WORKERS,
         persistent_workers=True,
         shuffle=True
     )
@@ -517,9 +560,11 @@ def full_run(training_images = 100, validation_images = 100, test_images = 100, 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     
     model = ResNet34SpectrogramClassifier(output_channels).to(device)
+    if NET_TYPE == 'vit':
+        model = TinyViTWrapper(output_channels).to(device)
     
     cost = torch.nn.CrossEntropyLoss()
-    learning_rate = 0.0001
+    learning_rate = LEARNING_RATE
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     step_size = 30
     gamma = 0.1
@@ -545,8 +590,8 @@ def full_run(training_images = 100, validation_images = 100, test_images = 100, 
     
     test_dataloader = torch.utils.data.DataLoader(
         test_dataset,
-        batch_size=32,
-        num_workers=12,
+        batch_size=BATCH_SIZE,
+        num_workers=NUM_WORKERS,
         persistent_workers=True,
         shuffle=True
     )
@@ -572,7 +617,6 @@ def format_acc(ac, se):
     return '{:.2f} \pm {:.2f}'.format(ac, se)
 
 def find_suitable_index(accs):
-    COUNT_LIMIT = 15
     prio_se = True
     
     #First check if there's an index with too little data
@@ -650,14 +694,14 @@ def find_suitable_index(accs):
     
 
 def load_accs():
-    file = open('accs', 'rb')
+    file = open('accs_' + NET_TYPE, 'rb')
     res = pickle.load(file)
     file.close()
     
     return res
 
-def save_accs(res):
-    file = open('accs', 'wb')
+def save_accs(res, net='resnet'):
+    file = open('accs_' + NET_TYPE, 'wb')
     pickle.dump(res, file)
     file.close()
 
@@ -767,6 +811,13 @@ CONFIG_AUGS = [[0,0,0,0],  #none
         [1,1,0,0],  #white noise + specaug
         [0,0,1,1],  #stft conv + specblur
         [1,1,1,1]]  #everything
+
+NET_TYPE = 'resnet'
+NET_TYPE = 'vit'
+NUM_WORKERS = 8
+COUNT_LIMIT = 10
+BATCH_SIZE = 16
+LEARNING_RATE = 1e-4
 
 if __name__ == '__main__':   
     #plot_augmentations()
