@@ -432,9 +432,9 @@ class ResNet34SpectrogramClassifier(nn.Module):
         return self.resnet34(x)
 
 class TinyViTWrapper(nn.Module):
-    def __init__(self, num_classes, img_size=224):
+    def __init__(self, num_classes, param_mode='5m'):
         super(TinyViTWrapper, self).__init__()
-        self.img_size = img_size
+        self.img_size = 224
         
         model_kwargs_5m = dict(
             embed_dims=[64, 128, 160, 320],
@@ -459,11 +459,20 @@ class TinyViTWrapper(nn.Module):
             window_sizes=[7, 7, 14, 7],
             drop_path_rate=0.2,
         )
+        
+        model_kwargs = None
+        
+        if (param_mode == '5m'):
+            model_kwargs = model_kwargs_5m
+        elif (param_mode == '11m'):
+            model_kwargs = model_kwargs_11m
+        else:
+            model_kwargs = model_kwargs_21m
                 
-        self.tiny_vit = TinyViT(img_size=img_size, 
+        self.tiny_vit = TinyViT(img_size=self.img_size, 
                                 in_chans=1,
                                 num_classes=num_classes,
-                                **model_kwargs_5m)
+                                **model_kwargs)
 
     def forward(self, x):
         # Resize image to square (self.img_size x self.img_size)
@@ -570,9 +579,7 @@ def full_run(training_images = 100, validation_images = 100, test_images = 100, 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     
     model = ResNet34SpectrogramClassifier(output_channels).to(device)
-    
-    #summary(model, input_size=(1))
-    
+        
     if NET_TYPE == 'vit':
         model = TinyViTWrapper(output_channels).to(device)
     
