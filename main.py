@@ -432,7 +432,7 @@ class ResNet34SpectrogramClassifier(nn.Module):
         return self.resnet34(x)
 
 class TinyViTWrapper(nn.Module):
-    def __init__(self, num_classes, param_mode='5m'):
+    def __init__(self, num_classes, param_mode='11m'):
         super(TinyViTWrapper, self).__init__()
         self.img_size = 224
         
