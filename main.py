@@ -18,6 +18,7 @@ from scipy.ndimage import gaussian_filter
 import time
 from concurrent.futures import ProcessPoolExecutor
 import pickle
+from tqdm import tqdm
 from tinyvit import TinyViT
 
 
@@ -42,7 +43,8 @@ def load_audio_files(path: str, train_im, val_im, test_im):
     all_contents = os.listdir(path)
     subdirs = [content for content in all_contents if os.path.isdir(os.path.join(path, content))]
     
-    for subdir in subdirs:
+    for subdir in tqdm(subdirs, desc="Loading Audio Files"):
+        
         subpath = os.path.join(path, subdir)
         
         walker = [str(p) for p in Path(subpath).glob(f'*.wav')]
@@ -395,7 +397,7 @@ def add_stft_conv(wf, sigma_time = 0.8, sigma_freq = 4):
 def augment_waveforms(ds, noise = False, stft_conv = False):
     aug_ds = []
     
-    for X, Y in ds:
+    for X, Y in tqdm(ds, desc="Augmenting waveforms", leave=False):
         if noise:  
             aug_ds.append([add_noise(X), Y])
         if stft_conv:
@@ -406,7 +408,7 @@ def augment_waveforms(ds, noise = False, stft_conv = False):
 def augment_spectrogram(ds, spec_aug = False, spec_blur = False):
     aug_ds = []
     
-    for X, Y in ds:
+    for X, Y in tqdm(ds, desc="Augmenting spectrograms", leave=False):
         if spec_aug:  
             aug_ds.append([add_spec_aug(X), Y])
 
@@ -461,7 +463,7 @@ class TinyViTWrapper(nn.Module):
         self.tiny_vit = TinyViT(img_size=img_size, 
                                 in_chans=1,
                                 num_classes=num_classes,
-                                **model_kwargs_11m)
+                                **model_kwargs_5m)
 
     def forward(self, x):
         # Resize image to square (self.img_size x self.img_size)
@@ -475,7 +477,8 @@ class TinyViTWrapper(nn.Module):
 def train(dataloader, model, loss, optimizer, scheduler, device, cost):
     model.train()
     size = len(dataloader.dataset)
-    for batch, (X, Y) in enumerate(dataloader):
+    progress_bar = tqdm(dataloader, desc="Training", leave=False)
+    for batch, (X, Y) in enumerate(progress_bar):
         
         X, Y = X.to(device), Y.to(device)
         optimizer.zero_grad()
@@ -484,9 +487,7 @@ def train(dataloader, model, loss, optimizer, scheduler, device, cost):
         loss.backward()
         optimizer.step()
         
-        if batch % 200 == 0:
-            loss, current = loss.item(), batch * len(X)
-            print(f'loss: {loss:>7f}  [{current:>5d}/{size:>5d}]')
+        progress_bar.set_description(f"Training - Loss: {loss.item():.4f}")
             
     scheduler.step()
 
@@ -496,7 +497,7 @@ def test(dataloader, model, device, cost, log = True):
     test_loss, correct = 0, 0
 
     with torch.no_grad():
-        for batch, (X, Y) in enumerate(dataloader):
+        for batch, (X, Y) in enumerate(tqdm(dataloader, desc="Validating/Testing", leave=False)):
             X, Y = X.to(device), Y.to(device)
             pred = model(X)
             
@@ -513,23 +514,32 @@ def test(dataloader, model, device, cost, log = True):
 
 def setup_dataset(train_images = 100, validation_images = 100, test_images = 100, aug = [0,0,0]):
     #load and one-hot encode labels
-    print('Loading audio data')
     train_dataset, validation_dataset, test_dataset, labels = load_audio_files('./data/SpeechCommands/speech_commands_v0.02', train_images, validation_images, test_images)
     train_dataset      = [[pad_waveform(X, 16000), one_hot_encode(label, labels)] for [X, label] in train_dataset]
     validation_dataset = [[pad_waveform(X, 16000), one_hot_encode(label, labels)] for [X, label] in validation_dataset]
     test_dataset       = [[pad_waveform(X, 16000), one_hot_encode(label, labels)] for [X, label] in test_dataset]
     
     #before converting into spectrograms for training, we do some data augmentation
-    print('Performing waveform augmentations')
     train_dataset_wf_aug = augment_waveforms(train_dataset, noise = aug[0], stft_conv = aug[3])
 
-    print("Computing spectrograms")
-    train_dataset = [[waveform_to_log_mel_spectrogram(waveform), label_vec] for [waveform, label_vec] in train_dataset]
-    train_dataset_wf_aug = [[waveform_to_log_mel_spectrogram(waveform), label_vec] for [waveform, label_vec] in train_dataset_wf_aug]
-    validation_dataset = [[waveform_to_log_mel_spectrogram(waveform), label_vec] for [waveform, label_vec] in validation_dataset]
-    test_dataset =  [[waveform_to_log_mel_spectrogram(waveform), label_vec] for [waveform, label_vec] in test_dataset]
+
+    if train_dataset:
+        train_dataset = [[waveform_to_log_mel_spectrogram(waveform), label_vec] 
+                         for waveform, label_vec in tqdm(train_dataset, desc="Processing Train Dataset")]
     
-    print("Performing spectrogram augmentations")
+    if train_dataset_wf_aug:
+        train_dataset_wf_aug = [[waveform_to_log_mel_spectrogram(waveform), label_vec] 
+                                for waveform, label_vec in tqdm(train_dataset_wf_aug, desc="Processing Augmented Train Dataset")]
+    
+    if validation_dataset:
+        validation_dataset = [[waveform_to_log_mel_spectrogram(waveform), label_vec] 
+                              for waveform, label_vec in tqdm(validation_dataset, desc="Processing Validation Dataset")]
+    
+    if test_dataset:
+        test_dataset = [[waveform_to_log_mel_spectrogram(waveform), label_vec] 
+                        for waveform, label_vec in tqdm(test_dataset, desc="Processing Test Dataset")]
+
+    
     train_dataset_spec_aug = augment_spectrogram(train_dataset, spec_aug = aug[1], spec_blur = aug[2])
     
     train_dataset += train_dataset_spec_aug
@@ -560,6 +570,9 @@ def full_run(training_images = 100, validation_images = 100, test_images = 100, 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     
     model = ResNet34SpectrogramClassifier(output_channels).to(device)
+    
+    #summary(model, input_size=(1))
+    
     if NET_TYPE == 'vit':
         model = TinyViTWrapper(output_channels).to(device)
     
@@ -575,11 +588,12 @@ def full_run(training_images = 100, validation_images = 100, test_images = 100, 
     best_acc = 0
     
     for t in range(max_epochs):
-        print(f'Epoch {t+1}\n-------------------------------')
+        print(f'\nEpoch {t+1}\n-------------------------------')
         train(train_dataloader, model, cost, optimizer, scheduler, device, cost)
         acc = test(validation_dataloader, model, device, cost, log = False)
         
         if acc > best_acc:
+            print("Validation accuracy: " + acc)
             best_acc = acc
             best_epoch = t
             
@@ -816,7 +830,7 @@ NET_TYPE = 'resnet'
 NET_TYPE = 'vit'
 NUM_WORKERS = 8
 COUNT_LIMIT = 10
-BATCH_SIZE = 16
+BATCH_SIZE = 32
 LEARNING_RATE = 1e-4
 
 if __name__ == '__main__':   
