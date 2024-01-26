@@ -499,6 +499,7 @@ def train(dataloader, model, loss, optimizer, scheduler, device, cost):
         progress_bar.set_description(f"Training - Loss: {loss.item():.4f}")
             
     scheduler.step()
+    return loss.item()
 
 def test(dataloader, model, device, cost, log = True):
     size = len(dataloader.dataset)
@@ -596,11 +597,12 @@ def full_run(training_images = 100, validation_images = 100, test_images = 100, 
     
     for t in range(max_epochs):
         print(f'\nEpoch {t+1}\n-------------------------------')
-        train(train_dataloader, model, cost, optimizer, scheduler, device, cost)
+        loss = train(train_dataloader, model, cost, optimizer, scheduler, device, cost)
         acc = test(validation_dataloader, model, device, cost, log = False)
         
+        print("Final loss: {:.4f}".format(loss))
+        print("Validation accuracy: {:.2f}%".format(acc))
         if acc > best_acc:
-            print("Validation accuracy: " + acc)
             best_acc = acc
             best_epoch = t
             
