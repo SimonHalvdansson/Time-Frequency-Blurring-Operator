@@ -577,13 +577,19 @@ def full_run(training_images = 100, validation_images = 100, test_images = 100, 
         shuffle=True
     )
     
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    device = 'cpu'
+    
+    if torch.cuda.is_available():
+        device = 'cuda'
+    elif torch.backends.mps.is_available():
+        device = 'mps'
+    
     
     model = ResNet34SpectrogramClassifier(output_channels).to(device)
         
     if NET_TYPE == 'vit':
         model = TinyViTWrapper(output_channels).to(device)
-    
+            
     cost = torch.nn.CrossEntropyLoss()
     learning_rate = LEARNING_RATE
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
