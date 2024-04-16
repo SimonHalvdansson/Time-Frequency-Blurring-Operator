@@ -4,22 +4,18 @@ import os
 import torch
 import torchaudio
 import matplotlib.pyplot as plt
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import DataLoader
 from pathlib import Path
-from torchvision import datasets, transforms, models
+from torchvision import models
 import torch.nn as nn
 import torch.nn.functional as F
-import torch.optim as optim
 import numpy as np
-from torchinfo import summary
-from functools import partial
 import random
-from scipy.ndimage import gaussian_filter
 import time
-from concurrent.futures import ProcessPoolExecutor
 import pickle
 from tqdm import tqdm
 from tinyvit import TinyViT
+from matplotlib.gridspec import GridSpec
 
 
 def download_and_save_data():
@@ -47,7 +43,7 @@ def load_audio_files(path: str, train_im, val_im, test_im):
         
         subpath = os.path.join(path, subdir)
         
-        walker = [str(p) for p in Path(subpath).glob(f'*.wav')]
+        walker = [str(p) for p in Path(subpath).glob('*.wav')]
         random.shuffle(walker)
                 
         for i, file_path in enumerate(walker):
@@ -126,7 +122,7 @@ def plot_spectrogram(spec, title=None, ylabel='Frequency', aspect='auto', xmax=N
     plt.show()
 
 def plot_spec_blur():
-    #Plots spectrogram and log-mel spectrogram before/after SpecBlur is applied, for use in paper
+    # Plots spectrogram and log-mel spectrogram before/after SpecBlur is applied, for use in a paper
     ds, _, _, labels = load_audio_files('./data/SpeechCommands/speech_commands_v0.02', 1, 0, 0)
     wf = ds[0][0]
     wf = pad_waveform(wf, 16000)
@@ -138,77 +134,52 @@ def plot_spec_blur():
     spec_og = waveform_to_spectrogram(wf, n_fft, hop_length)
     
     f_max = 10000
-    n_bins = int(n_fft / 2) + 1
     max_bin = int(f_max * n_fft / 16000)
     
     spec_og = spec_og[:, :max_bin, :]
     
-    #we've computed a spectrogram, let's blur it and then plot both
+    # Apply SpecBlur to the original spectrogram
     spec_og_blur = add_spec_blur(spec_og)
     
-    #then plot log-scale versions of both of these
-    mel_rescale = torchaudio.transforms.MelScale(
-        n_mels, 16000, 0.0, None, n_fft // 2 + 1, 'slaney'
-    )
-        
+    # Convert to mel scale
+    mel_rescale = torchaudio.transforms.MelScale(n_mels, 16000, 0.0, None, n_fft // 2 + 1, 'slaney')
     spec_og_lm = mel_rescale(spec_og)
     spec_og_blur_lm = mel_rescale(spec_og_blur)
-        
+    
+    # List for easy indexing in the loop
     spectrograms = [spec_og.numpy(), spec_og_blur.numpy(), spec_og_lm.numpy(), spec_og_blur_lm.numpy()]
-    titles = ['Original spectrogram (dB)', 'Blurred spectrogram (dB)', 'Mel rescaled original spectrogram (dB)', 'Mel rescaled blurred spectrogram (dB)']
+    titles = [
+        'Original Spectrogram (dB)', 'Blurred Spectrogram (dB)', 
+        'Mel Rescaled Original Spectrogram (dB)', 'Mel Rescaled Blurred Spectrogram (dB)'
+    ]
     
-    fig, axes = plt.subplots(1, 4, figsize=(20, 4), sharey=False, dpi=300)
-    
-    for i, spec in enumerate(spectrograms):
-        if i <= 1:
-            im = axes[i].imshow(spec.squeeze(), aspect="auto", origin="lower", extent=[0, 1, 0, f_max])
-        else:
-            im = axes[i].imshow(spec.squeeze(), aspect="auto", origin="lower", extent=[0, 1, 0, 256])
+    # Create a 2x2 grid for the plots
+    fig, axes = plt.subplots(2, 2, figsize=(16, 8), dpi=300)
 
-        axes[i].set_title(titles[i])
-        if i == 0:
-            axes[i].set_xlabel('Time[s]')
-        if i == 0:
-            axes[i].set_ylabel('Frequency [Hz]')
-        if i == 2:
-            axes[i].set_ylabel('Mel frequency bin')
+    # Adjust spacing if needed
+    fig.subplots_adjust(hspace=0.4)  # You can adjust this value as needed
+
+    # Use nested loop for row and column indexing
+    for i, ax in enumerate(axes.flatten()):
+        extent = [0, 1, 0, f_max] if i < 2 else [0, 1, 0, n_mels]
+        ax.imshow(spectrograms[i].squeeze(), aspect="auto", origin="lower", extent=extent)
+        ax.set_title(titles[i])
+        ax.set_xlabel('Time [s]')
+        if i % 2 == 0:  # Set y-label for the left column
+            ax.set_ylabel('Frequency [Hz]' if i == 0 else 'Mel frequency bin')
     
     plt.show()
+    
 
-def plot_lm_spec_blur():
-    #For use in paper
-    ds, _, _, labels = load_audio_files('./data/SpeechCommands/speech_commands_v0.02', 1, 0, 0)
-    wf = ds[0][0]
-    wf = pad_waveform(wf, 16000)
-    
-    spec = waveform_to_log_mel_spectrogram(wf)
-    spec_blur = add_spec_blur(spec)
-    
-    spectrograms = [spec.numpy(), spec_blur.numpy()]
-    titles = ['Original log-mel spectrogram', 'Blurred log-mel spectrogram']
-    
-    fig, axes = plt.subplots(1, 2, figsize=(10, 4), sharey=False, dpi=300)
-    
-    for i, spec in enumerate(spectrograms):
-        im = axes[i].imshow(spec.squeeze(), aspect="auto", origin="lower", extent=[0, 1, 0, 256])
-
-        axes[i].set_title(titles[i])
-        if i == 0:
-            axes[i].set_xlabel('Time[s]')
-        if i == 0:
-            axes[i].set_ylabel('Mel frequency bin')
-    
-    plt.show()
-
-def plot_stft_conv(save = False):
-    #Plots spectrogram and log-mel spectrogram before/after blurring operator is applied, for use in paper
+def plot_stft_conv(save=False):
+    # Load the dataset and prepare data
     ds, _, _, labels = load_audio_files('./data/SpeechCommands/speech_commands_v0.02', 1, 0, 0)
     wf = ds[0][0]
     wf = pad_waveform(wf, 16000)
     
     wf_e = wf.pow(2).sum()
     
-    wf_stft = add_stft_conv(wf, sigma_time = 1.2, sigma_freq = 6)
+    wf_stft = add_stft_conv(wf, sigma_time=1.2, sigma_freq=6)
     
     wf_stft_e = wf_stft.pow(2).sum()
     
@@ -223,40 +194,50 @@ def plot_stft_conv(save = False):
     
     s1 = waveform_to_spectrogram(wf, n_fft, hop_length)
     s2 = waveform_to_spectrogram(wf_stft, n_fft, hop_length)
+    s3 = waveform_to_log_mel_spectrogram(wf)
+    s4 = waveform_to_log_mel_spectrogram(wf_stft)
     
     f_max = 10000
-    n_bins = int(n_fft / 2) + 1
     max_bin = int(f_max * n_fft / 16000)
     
     s1 = s1[:, :max_bin, :]
     s2 = s2[:, :max_bin, :]
     
-    s3 = waveform_to_log_mel_spectrogram(wf)
-    s4 = waveform_to_log_mel_spectrogram(wf_stft)
-    
-    spectrograms = [s1.numpy(), s2.numpy(), s3.numpy(), s4.numpy()]
-    titles = ['Original spectrogram (dB)', 'STFT-conv spectrogram (dB)', 'Original log-mel spectrogram', 'STFT-conv log-mel spectrogram']
-    
-    fig, axes = plt.subplots(1, 4, figsize=(20, 4), sharey=False, dpi=300)
-    
-    for i, spec in enumerate(spectrograms):
-        if i <= 1:
-            im = axes[i].imshow(spec.squeeze(), aspect="auto", origin="lower", extent=[0, 1, 0, f_max])
-        else:
-            im = axes[i].imshow(spec.squeeze(), aspect="auto", origin="lower", extent=[0, 1, 0, 256])
+    # Create a 2x2 grid for the plots
+    fig, axes = plt.subplots(2, 2, figsize=(16, 8), dpi=300)
 
-        axes[i].set_title(titles[i])
-        if i == 0:
-            axes[i].set_xlabel('Time[s]')
-        if i == 0:
-            axes[i].set_ylabel('Frequency [Hz]')
-        if i == 2:
-            axes[i].set_ylabel('Mel frequency bin')
-    
+    # Adjust spacing
+    fig.subplots_adjust(hspace=0.3)  # Increase vertical space between rows
+
+    # Plot original spectrogram in top-left
+    axes[0, 0].imshow(s1.numpy().squeeze(), aspect="auto", origin="lower", extent=[0, 1, 0, f_max])
+    axes[0, 0].set_title('Original spectrogram (dB)')
+    axes[0, 0].set_xlabel('Time [s]')
+    axes[0, 0].set_ylabel('Frequency [Hz]')
+
+    # Plot STFT-conv spectrogram in top-right
+    axes[0, 1].imshow(s2.numpy().squeeze(), aspect="auto", origin="lower", extent=[0, 1, 0, f_max])
+    axes[0, 1].set_title('STFT-conv spectrogram (dB)')
+    axes[0, 1].set_xlabel('Time [s]')
+
+    # Plot original log-mel spectrogram in bottom-left
+    axes[1, 0].imshow(s3.numpy().squeeze(), aspect="auto", origin="lower", extent=[0, 1, 0, 256])
+    axes[1, 0].set_title('Original log-mel spectrogram (dB)')
+    axes[1, 0].set_xlabel('Time [s]')
+    axes[1, 0].set_ylabel('Mel frequency bin')
+
+    # Plot STFT-conv log-mel spectrogram in bottom-right
+    axes[1, 1].imshow(s4.numpy().squeeze(), aspect="auto", origin="lower", extent=[0, 1, 0, 256])
+    axes[1, 1].set_title('STFT-conv log-mel spectrogram (dB)')
+    axes[1, 1].set_xlabel('Time [s]')
+
+    if save:
+        plt.savefig('combined_spectrograms.png')  # Save a single file with all plots
     plt.show()
 
+
 def plot_augmentations():
-    #Plots the summary of augmentation methods presented in the paper
+    # Plots the summary of augmentation methods presented in the paper
     ds, _, _, labels = load_audio_files('./data/SpeechCommands/speech_commands_v0.02', 1, 0, 0)
     wf = ds[0][0]
     wf = pad_waveform(wf, 16000)
@@ -269,22 +250,37 @@ def plot_augmentations():
     spec_stft_conv = waveform_to_log_mel_spectrogram(wf_stft_conv)
     spec_aug = add_spec_aug(spec)
     spec_blur = add_spec_blur(spec)
-    
-    spectrograms = [spec.numpy(), spec_noise.numpy(), spec_aug.numpy(), spec_stft_conv.numpy(), spec_blur.numpy()]
+        
+    spectrograms = [spec, spec_noise, spec_aug, spec_stft_conv, spec_blur]
     titles = ['Original', 'White noise', 'SpecAugment', 'STFT convolved', 'SpecBlur']
     
-    fig, axes = plt.subplots(1, 5, figsize=(20, 4), sharey=True, dpi=300)
+    fig = plt.figure(figsize=(15, 8), dpi=300)
+    gs = GridSpec(2, 6, figure=fig)
     
-    for i, spec in enumerate(spectrograms):
-        im = axes[i].imshow(spec.squeeze(), aspect="auto", origin="lower", extent=[0, 1, 0, 256])
-        axes[i].set_title(titles[i])
-        if i == 2:
-            axes[i].set_xlabel('Time[s]')
-        if i == 0:
-            axes[i].set_ylabel('Mel frequency bin')
+    # Top row
+    ax0 = fig.add_subplot(gs[0, 0:2])
+    ax1 = fig.add_subplot(gs[0, 2:4])
+    ax2 = fig.add_subplot(gs[0, 4::])
+
+    # Bottom row, centered
+    ax3 = fig.add_subplot(gs[1, 1:3])
+    ax4 = fig.add_subplot(gs[1, 3:5])
     
-    
+    axes = [ax0, ax1, ax2, ax3, ax4]
+
+    for i, ax in enumerate(axes):
+        ax.imshow(spectrograms[i].numpy().squeeze(), aspect="auto", origin="lower", extent=[0, 1, 0, 256])
+        ax.set_title(titles[i])
+        if i >= 3:  # Bottom row
+            ax.set_xlabel('Time [s]')
+        if i % 3 == 0 or i == 3:  # Leftmost columns
+            ax.set_ylabel('Mel frequency bin')
+
+    plt.tight_layout()
+    plt.subplots_adjust(hspace=0.3)  # Adjust vertical spacing as needed
+
     plt.show()
+
         
 def pad_waveform(waveform, target_length):
     current_length = waveform.shape[-1]
@@ -485,7 +481,6 @@ class TinyViTWrapper(nn.Module):
 
 def train(dataloader, model, loss, optimizer, scheduler, device, cost):
     model.train()
-    size = len(dataloader.dataset)
     progress_bar = tqdm(dataloader, desc="Training", leave=False)
     for batch, (X, Y) in enumerate(progress_bar):
         
@@ -851,10 +846,9 @@ LEARNING_RATE = 1e-4
 if __name__ == '__main__':   
     #plot_augmentations()
     #plot_stft_conv()
-    #plot_spec_blur()
-    #plot_lm_spec_blur()
+    plot_spec_blur()
     
-    improve()
+    #improve()
     #export_results()
     
     pass
