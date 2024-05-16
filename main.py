@@ -171,18 +171,16 @@ def plot_spec_blur():
     plt.show()
     
 
-def plot_stft_conv(save=False):
+def plot_stft_conv(save=False, transparent = False):
     # Load the dataset and prepare data
     ds, _, _, labels = load_audio_files('./data/SpeechCommands/speech_commands_v0.02', 1, 0, 0)
     wf = ds[0][0]
     wf = pad_waveform(wf, 16000)
-    
     wf_e = wf.pow(2).sum()
-    
+        
     wf_stft = add_stft_conv(wf, sigma_time=1.2, sigma_freq=6)
     
     wf_stft_e = wf_stft.pow(2).sum()
-    
     wf_stft = wf_stft * np.sqrt((wf_e / wf_stft_e))
     
     if save:
@@ -232,7 +230,7 @@ def plot_stft_conv(save=False):
     axes[1, 1].set_xlabel('Time [s]')
 
     if save:
-        plt.savefig('combined_spectrograms.png')  # Save a single file with all plots
+        plt.savefig('combined_spectrograms.png', transparent = transparent)  # Save a single file with all plots
     plt.show()
 
 
@@ -278,6 +276,8 @@ def plot_augmentations():
 
     plt.tight_layout()
     plt.subplots_adjust(hspace=0.3)  # Adjust vertical spacing as needed
+
+    plt.savefig('augs.png', transparent=True)
 
     plt.show()
 
@@ -579,7 +579,6 @@ def full_run(training_images = 100, validation_images = 100, test_images = 100, 
     elif torch.backends.mps.is_available():
         device = 'mps'
     
-    
     model = ResNet34SpectrogramClassifier(output_channels).to(device)
         
     if NET_TYPE == 'vit':
@@ -640,9 +639,7 @@ def average_runs(training_images = 100, validation_images = 100, test_images = 1
 def format_acc(ac, se):
     return '{:.2f} \pm {:.2f}'.format(ac, se)
 
-def find_suitable_index(accs):
-    prio_se = True
-    
+def find_suitable_index(accs):   
     #First check if there's an index with too little data
     for count_ind in range(len(CONFIG_COUNTS)):
         for aug_ind in range(len(CONFIG_AUGS)):
@@ -652,69 +649,32 @@ def find_suitable_index(accs):
                 return count_ind, aug_ind
         
         
-    if prio_se:
-        #new we check where we have the largest standard error (std/sqrt(n)) because this is the error of the esimator
-        se_max = 0
-        se_max_count_ind = None
-        se_max_aug_ind = None
-        se_sum = 0
-        
-        for count_ind in range(len(CONFIG_COUNTS)):
-            for aug_ind in range(len(CONFIG_AUGS)):
-                n = len(accs[count_ind][aug_ind])
-                #we do the derivative instead because we want to decrease se as much as possible
-                se = accs[count_ind][aug_ind].std()/(n**1.5)/CONFIG_COUNTS[count_ind]
-                se_sum += se*n*CONFIG_COUNTS[count_ind]
-                
-                if se > se_max:
-                    se_max = se
-                    se_max_count_ind = count_ind
-                    se_max_aug_ind = aug_ind
-                    
-        
-                    
-        print('Maximum SE config, count: {}, aug: {}, starting training'
-                  .format(CONFIG_COUNTS[se_max_count_ind], CONFIG_AUGS[se_max_aug_ind]))
-        print('Current SE sum: {:.2f}'.format(se_sum))
-        
-        return se_max_count_ind, se_max_aug_ind
-    
-        
-    rel_se_max_count_ind = 0
-    rel_se_max_aug_ind = 0
-    rel_se_max = 100
+    #new we check where we have the largest standard error (std/sqrt(n)) because this is the error of the esimator
+    se_max = 0
+    se_max_count_ind = None
+    se_max_aug_ind = None
+    se_sum = 0
     
     for count_ind in range(len(CONFIG_COUNTS)):
-        
-        this_count_highest_error = 100
-        target_aug_ind = None
-        
-        for aug_ind_i in range(len(CONFIG_AUGS)):
-            for aug_ind_j in range(aug_ind_i + 1, len(CONFIG_AUGS)):
-                data_i = accs[count_ind][aug_ind_i]
-                data_j = accs[count_ind][aug_ind_j]
+        for aug_ind in range(len(CONFIG_AUGS)):
+            n = len(accs[count_ind][aug_ind])
+            #we do the derivative instead because we want to decrease se as much as possible
+            se = accs[count_ind][aug_ind].std()/(n**1.5)/CONFIG_COUNTS[count_ind]
+            se_sum += se*n*CONFIG_COUNTS[count_ind]
+            
+            if se > se_max:
+                se_max = se
+                se_max_count_ind = count_ind
+                se_max_aug_ind = aug_ind
                 
-                mi = data_i.mean()
-                mj = data_j.mean()
-                sei = data_i.std()/np.sqrt(len(data_i))
-                sej = data_j.std()/np.sqrt(len(data_j))
-                val = abs(mi - mj) - sei - sej
-                if val < this_count_highest_error:
-                    this_count_highest_error = val
-                    if sei > sej:
-                        target_aug_ind = aug_ind_i
-                    else:
-                        target_aug_ind = aug_ind_j
-                        
-        #once we've gone through all aug combos, report the results
-        if this_count_highest_error < rel_se_max:
-            rel_se_max = this_count_highest_error
-            rel_se_max_count_ind = count_ind
-            rel_se_max_aug_ind = target_aug_ind
-                            
-    print('Highest difference found associated to count: {}, aug{} where relative SE was: {:.3f}'
-          .format(CONFIG_COUNTS[rel_se_max_count_ind], CONFIG_AUGS[rel_se_max_aug_ind], rel_se_max))
-    return rel_se_max_count_ind, rel_se_max_aug_ind
+    
+                
+    print('Maximum SE config, count: {}, aug: {}, starting training'
+              .format(CONFIG_COUNTS[se_max_count_ind], CONFIG_AUGS[se_max_aug_ind]))
+    print('Current SE sum: {:.2f}'.format(se_sum))
+    
+    return se_max_count_ind, se_max_aug_ind
+
     
 
 def load_accs():
@@ -776,6 +736,7 @@ def export_results(accs = None):
         s = aug_names[aug_ind]
         for count_ind in range(len(CONFIG_COUNTS)):
             samples = accs[count_ind][aug_ind]
+            
             avg, se = samples.mean(), samples.std()/np.sqrt(len(samples))
             
             se_sum += se
@@ -794,9 +755,9 @@ def export_results(accs = None):
     means = [ [ accs[count_ind][aug_ind].mean() for aug_ind in range(len(CONFIG_AUGS)) ] for count_ind in range(len(CONFIG_COUNTS))]
     ses = [ [ accs[count_ind][aug_ind].std()/np.sqrt(len(accs[count_ind][aug_ind])) for aug_ind in range(len(CONFIG_AUGS)) ] for count_ind in range(len(CONFIG_COUNTS))]
     
-    comparisions = [[3,0], [4,0], [5,7], [3,4]]
+    comps = [[3,0], [4,0], [5,7], [3,4]]
     
-    for comp in comparisions:
+    for comp in comps:
         i1 = comp[0]
         i2 = comp[1]
         
@@ -818,12 +779,16 @@ def report_acc_stats(accs = None):
     print('')
     print('Counts for each config: ')
     print(counts)
+    print('')
+    print('Total number of runs: ' + str(sum(sum(np.array(counts)))))
+    print('')
     
     if np.array(counts).min() > 0:
         print('Standard error for each config')
         ses = [ [ '{:.2f}'.format(accs[count_ind][aug_ind].std()/np.sqrt(len(accs[count_ind][aug_ind]))) for aug_ind in range(len(CONFIG_AUGS)) ] for count_ind in range(len(CONFIG_COUNTS))]
         print(ses)
     
+
     
 CONFIG_COUNTS = [100, 300, 600, 1000]
 
@@ -845,12 +810,12 @@ LEARNING_RATE = 1e-4
 
 if __name__ == '__main__':   
     #plot_augmentations()
-    #plot_stft_conv()
-    plot_spec_blur()
+    plot_stft_conv(True, True)
+    #plot_spec_blur()
     
     #improve()
     #export_results()
-    
+    #report_acc_stats()
     pass
 
     
