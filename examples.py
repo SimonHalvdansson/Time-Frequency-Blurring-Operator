@@ -212,16 +212,18 @@ def blur_waveform_complex(waveform, kernel, window):
 # ------------------------------
 # Plotting Functions
 # ------------------------------
-
 def plot_operator_figures_stft():
     """
     Computes a complex-valued STFT of a waveform, blurs it with various kernels,
     reconstructs the waveform using inverse STFT, and then plots a 3x5 figure.
     
-    Columns correspond to the five different kernels. The rows represent:
-      - Top row: STFT-based blurred spectrogram.
-      - Middle row: Spectrogram (magnitude)-based blurred spectrogram.
-      - Bottom row: Kernel visualization.
+    The rows now are:
+      - Top row: Kernel visualization.
+      - Middle row: STFT blurred spectrogram.
+      - Bottom row: Spectrogram blurred spectrogram.
+      
+    The x-axis for the blurred spectrogram rows is labeled "Time [s]" with ticks every 0.2 s.
+    Only the leftmost subplot in each row shows the y-axis label.
     """
     # Load one random 1-sec waveform from SpeechCommands.
     data_path = os.path.join('data', 'SpeechCommands', 'speech_commands_v0.02')
@@ -266,38 +268,71 @@ def plot_operator_figures_stft():
     
     # Create a 3 (rows) x 5 (columns) subplot grid.
     fig, axes = plt.subplots(nrows=3, ncols=len(kernels), figsize=(15, 12), dpi=500)
-    fig.suptitle('Blurring Comparisons: STFT vs. Spectrogram Convolution', fontsize=16)
+    # (Removed overall title)
     
-    # Iterate over kernels to populate columns.
+    # Define time ticks (for a 1-second duration with ticks every 0.2 sec)
+    tick_times = np.arange(0, 1.01, 0.2)
+    
     for j, (name, kernel) in enumerate(kernels.items()):
-        # Top row: STFT-based blurred spectrogram.
-        ax_top = axes[0, j]
-        im_top = ax_top.imshow(stft_blur_specs[name], origin='lower', aspect='auto')
-        ax_top.set_title(name)
-        ax_top.set_ylabel('STFT Blurred')
-        ax_top.set_xlabel('Time')
+        # -----------------------------
+        # Row 0: Kernel visualization
+        # -----------------------------
+        ax_kernel = axes[0, j]
+        im_kernel = ax_kernel.imshow(kernel.numpy(), cmap='viridis', origin='lower', 
+                                       aspect='auto', interpolation='nearest')
+        ax_kernel.set_title(name)
+        ax_kernel.set_xlabel('Kernel X')
+        if j == 0:
+            ax_kernel.set_ylabel('Kernel Y')
+        else:
+            ax_kernel.set_ylabel('')
         
-        # Middle row: Spectrogram-based blurred spectrogram.
-        ax_mid = axes[1, j]
-        im_mid = ax_mid.imshow(spec_blur_specs[name], origin='lower', aspect='auto')
-        ax_mid.set_ylabel('Spec Blurred')
-        ax_mid.set_xlabel('Time')
+        # -----------------------------
+        # Row 1: STFT blurred spectrogram
+        # -----------------------------
+        ax_stft = axes[1, j]
+        im_stft = ax_stft.imshow(stft_blur_specs[name], origin='lower', aspect='auto')
+        ax_stft.set_xlabel('Time [s]')
+        if j == 0:
+            ax_stft.set_ylabel('STFT blurred')
+        else:
+            ax_stft.set_ylabel('')
+        # Set x-ticks based on the width of the spectrogram.
+        num_time_steps = stft_blur_specs[name].shape[1]
+        tick_positions = tick_times * (num_time_steps - 1)
+        ax_stft.set_xticks(tick_positions)
+        ax_stft.set_xticklabels([f"{t:.1f}" for t in tick_times])
         
-        # Bottom row: Kernel visualization.
-        ax_bot = axes[2, j]
-        im_bot = ax_bot.imshow(kernel.numpy(), cmap='viridis', origin='lower', aspect='auto', interpolation='nearest')
-        ax_bot.set_ylabel('Kernel')
-        ax_bot.set_xlabel('Kernel X')
+        # -----------------------------
+        # Row 2: Spectrogram blurred spectrogram
+        # -----------------------------
+        ax_spec = axes[2, j]
+        im_spec = ax_spec.imshow(spec_blur_specs[name], origin='lower', aspect='auto')
+        ax_spec.set_xlabel('Time [s]')
+        if j == 0:
+            ax_spec.set_ylabel('Spectrogram blurred')
+        else:
+            ax_spec.set_ylabel('')
+        # Set x-ticks based on the width of the spectrogram.
+        num_time_steps_spec = spec_blur_specs[name].shape[1]
+        tick_positions_spec = tick_times * (num_time_steps_spec - 1)
+        ax_spec.set_xticks(tick_positions_spec)
+        ax_spec.set_xticklabels([f"{t:.1f}" for t in tick_times])
     
-    plt.tight_layout(rect=[0, 0, 1, 0.95])
+    plt.tight_layout(rect=[0, 0, 1, 1])
     plt.show()
+
 
 def plot_white_noise_comparison():
     """
     Creates a 1x3 figure comparing:
       - Left: Raw spectrogram of white noise (no blurring).
       - Middle: Spectrogram blurred using complex STFT processing with a Gaussian kernel.
-      - Right: Spectrogram blurred using the magnitude-based add_spec_blur (using the same kernel).
+      - Right: Spectrogram blurred using the magnitude-based method (add_spec_blur).
+      
+    For the white noise figure:
+      - The x-axis is labeled "Time [s]" with ticks every 0.2 s.
+      - Only the left subplot shows the y-axis label ("Frequency").
     """
     # Generate white noise (1 sec)
     white_noise = torch.randn(1, TARGET_LENGTH)
@@ -311,37 +346,62 @@ def plot_white_noise_comparison():
     # Compute a single Gaussian kernel to be shared.
     kernel_gauss = gaussian_kernel()
     
-    # Middle: blur using complex STFT processing (apply the kernel to real and imaginary parts)
+    # Blur using complex STFT processing.
     waveform_blur_complex = blur_waveform_complex(white_noise, kernel_gauss, window)
     noise_blurred_complex = waveform_to_spectrogram(waveform_blur_complex)
     
-    # Right: blur using the magnitude-based method with add_spec_blur (using same kernel)
+    # Blur using the magnitude-based method.
     spec_noise = waveform_to_spectrogram(white_noise)
     noise_blurred_spec = add_spec_blur(spec_noise, kernel_gauss)
     
     # Create 1x3 plot
     fig, axes = plt.subplots(1, 3, figsize=(18, 6), dpi=500)
     
+    # Define time ticks (for a 1-second duration with ticks every 0.2 sec)
+    tick_times = np.arange(0, 1.01, 0.2)
+    
+    # -----------------------------
     # Left: Raw spectrogram
-    axes[0].imshow(raw_spec.squeeze().numpy(), origin='lower', aspect='auto')
-    axes[0].set_title('Raw Spectrogram')
-    axes[0].set_xlabel('Time')
-    axes[0].set_ylabel('Frequency')
+    # -----------------------------
+    ax0 = axes[0]
+    raw_img = ax0.imshow(raw_spec.squeeze().numpy(), origin='lower', aspect='auto')
+    ax0.set_title('Raw Spectrogram')
+    ax0.set_xlabel('Time [s]')
+    ax0.set_ylabel('Frequency')
+    num_time_steps = raw_spec.squeeze().numpy().shape[1]
+    tick_positions = tick_times * (num_time_steps - 1)
+    ax0.set_xticks(tick_positions)
+    ax0.set_xticklabels([f"{t:.1f}" for t in tick_times])
     
-    # Middle: Gaussian Window Blur (complex STFT-based)
-    axes[1].imshow(noise_blurred_complex.squeeze().numpy(), origin='lower', aspect='auto')
-    axes[1].set_title('Gaussian Window Blur\n(Complex STFT)')
-    axes[1].set_xlabel('Time')
-    axes[1].set_ylabel('Frequency')
+    # -----------------------------
+    # Middle: Gaussian Window Blur (Complex STFT)
+    # -----------------------------
+    ax1 = axes[1]
+    img1 = ax1.imshow(noise_blurred_complex.squeeze().numpy(), origin='lower', aspect='auto')
+    ax1.set_title('Gaussian Window Blur\n(Complex STFT)')
+    ax1.set_xlabel('Time [s]')
+    ax1.set_ylabel('')  # Remove y-axis label.
+    num_time_steps1 = noise_blurred_complex.squeeze().numpy().shape[1]
+    tick_positions1 = tick_times * (num_time_steps1 - 1)
+    ax1.set_xticks(tick_positions1)
+    ax1.set_xticklabels([f"{t:.1f}" for t in tick_times])
     
-    # Right: Magnitude-based blur via add_spec_blur (using same kernel)
-    axes[2].imshow(noise_blurred_spec.squeeze().numpy(), origin='lower', aspect='auto')
-    axes[2].set_title('Spectrogram Blurring\n(Magnitude-based)')
-    axes[2].set_xlabel('Time')
-    axes[2].set_ylabel('Frequency')
+    # -----------------------------
+    # Right: Magnitude-based blur (add_spec_blur)
+    # -----------------------------
+    ax2 = axes[2]
+    img2 = ax2.imshow(noise_blurred_spec.squeeze().numpy(), origin='lower', aspect='auto')
+    ax2.set_title('Spectrogram Blurring\n(Magnitude-based)')
+    ax2.set_xlabel('Time [s]')
+    ax2.set_ylabel('')  # Remove y-axis label.
+    num_time_steps2 = noise_blurred_spec.squeeze().numpy().shape[1]
+    tick_positions2 = tick_times * (num_time_steps2 - 1)
+    ax2.set_xticks(tick_positions2)
+    ax2.set_xticklabels([f"{t:.1f}" for t in tick_times])
     
-    plt.tight_layout(rect=[0, 0, 1, 0.93])
+    plt.tight_layout(rect=[0, 0, 1, 1])
     plt.show()
+
 
 # ------------------------------
 # Main Execution
